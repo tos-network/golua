@@ -1,10 +1,8 @@
 package lua
 
 import (
-	"context"
 	"fmt"
 	"math/big"
-	"os"
 )
 
 type LValueType int
@@ -16,12 +14,10 @@ const (
 	LTString
 	LTFunction
 	LTUserData
-	LTThread
 	LTTable
-	LTChannel
 )
 
-var lValueNames = [9]string{"nil", "boolean", "number", "string", "function", "userdata", "thread", "table", "channel"}
+var lValueNames = [7]string{"nil", "boolean", "number", "string", "function", "userdata", "table"}
 
 func (vt LValueType) String() string {
 	return lValueNames[int(vt)]
@@ -179,29 +175,23 @@ type Global struct {
 	Global        *LTable
 
 	builtinMts map[int]LValue
-	tempFiles  []*os.File
 	gccount    int32
 }
 
 type LState struct {
 	G       *Global
-	Parent  *LState
 	Env     *LTable
 	Panic   func(*LState)
 	Dead    bool
 	Options Options
 
-	stop         int32
 	reg          *registry
 	stack        callFrameStack
 	alloc        *allocator
 	currentFrame *callFrame
-	wrapped      bool
 	uvcache      *Upvalue
 	hasErrorFunc bool
 	mainLoop     func(*LState, *callFrame)
-	ctx          context.Context
-	ctxCancelFn  context.CancelFunc
 
 	// Gas metering: set via SetGasLimit before execution.
 	gasLimit uint64
@@ -218,9 +208,6 @@ func (ls *LState) SetGasLimit(limit uint64) {
 // GasUsed returns the number of VM instructions executed so far.
 func (ls *LState) GasUsed() uint64 { return ls.gasUsed }
 
-func (ls *LState) String() string   { return "thread" }
-func (ls *LState) Type() LValueType { return LTThread }
-
 type LUserData struct {
 	Value     interface{}
 	Env       *LTable
@@ -229,8 +216,3 @@ type LUserData struct {
 
 func (ud *LUserData) String() string   { return "userdata" }
 func (ud *LUserData) Type() LValueType { return LTUserData }
-
-type LChannel chan LValue
-
-func (ch LChannel) String() string   { return "channel" }
-func (ch LChannel) Type() LValueType { return LTChannel }

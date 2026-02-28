@@ -36,43 +36,6 @@ func mainLoop(L *LState, baseframe *callFrame) {
 	}
 }
 
-func mainLoopWithContext(L *LState, baseframe *callFrame) {
-	var inst uint32
-	var cf *callFrame
-
-	if L.stack.IsEmpty() {
-		return
-	}
-
-	L.currentFrame = L.stack.Last()
-	if L.currentFrame.Fn.IsG {
-		callGFunction(L, false)
-		return
-	}
-
-	for {
-		cf = L.currentFrame
-		inst = cf.Fn.Proto.Code[cf.Pc]
-		cf.Pc++
-		if L.gasLimit > 0 {
-			L.gasUsed++
-			if L.gasUsed > L.gasLimit {
-				L.RaiseError("lua: gas limit exceeded")
-				return
-			}
-		}
-		select {
-		case <-L.ctx.Done():
-			L.RaiseError(L.ctx.Err().Error())
-			return
-		default:
-			if jumpTable[int(inst>>26)](L, inst, baseframe) == 1 {
-				return
-			}
-		}
-	}
-}
-
 // regv is the first target register to copy the return values to.
 // It can be reg.top, indicating that the copied values are going into new registers, or it can be below reg.top
 // Indicating that the values should be within the existing registers.
@@ -91,30 +54,6 @@ func copyReturnValues(L *LState, regv, start, n, b int) { // +inline-start
 	}
 } // +inline-end
 
-func switchToParentThread(L *LState, nargs int, haserror bool, kill bool) {
-	parent := L.Parent
-	if parent == nil {
-		L.RaiseError("can not yield from outside of a coroutine")
-	}
-	L.G.CurrentThread = parent
-	L.Parent = nil
-	if !L.wrapped {
-		if haserror {
-			parent.Push(LFalse)
-		} else {
-			parent.Push(LTrue)
-		}
-	}
-	L.XMoveTo(parent, nargs)
-	L.stack.Pop()
-	offset := L.currentFrame.LocalBase - L.currentFrame.ReturnBase
-	L.currentFrame = L.stack.Last()
-	L.reg.SetTop(L.reg.Top() - offset) // remove 'yield' function(including tailcalled functions)
-	if kill {
-		L.kill()
-	}
-}
-
 func callGFunction(L *LState, tailcall bool) bool {
 	frame := L.currentFrame
 	gfnret := frame.Fn.GFunction(L)
@@ -123,18 +62,12 @@ func callGFunction(L *LState, tailcall bool) bool {
 	}
 
 	if gfnret < 0 {
-		switchToParentThread(L, L.GetTop(), false, false)
-		return true
+		L.RaiseError("coroutine support is disabled")
 	}
 
 	wantret := frame.NRet
 	if wantret == MultRet {
 		wantret = gfnret
-	}
-
-	if tailcall && L.Parent != nil && L.stack.Sp() == 1 {
-		switchToParentThread(L, wantret, false, true)
-		return true
 	}
 
 	// +inline-call L.reg.CopyRange frame.ReturnBase L.reg.Top()-gfnret -1 wantret
@@ -150,24 +83,7 @@ func threadRun(L *LState) {
 
 	defer func() {
 		if rcv := recover(); rcv != nil {
-			var lv LValue
-			if v, ok := rcv.(*ApiError); ok {
-				lv = v.Object
-			} else {
-				lv = LString(fmt.Sprint(rcv))
-			}
-			if parent := L.Parent; parent != nil {
-				if L.wrapped {
-					L.Push(lv)
-					parent.Panic(L)
-				} else {
-					L.SetTop(0)
-					L.Push(lv)
-					switchToParentThread(L, 1, true, true)
-				}
-			} else {
-				panic(rcv)
-			}
+			panic(rcv)
 		}
 	}()
 	L.mainLoop(L, nil)
@@ -679,11 +595,6 @@ func init() {
 				n = nret
 			}
 
-			if L.Parent != nil && L.stack.Sp() == 1 {
-				// +inline-call copyReturnValues L reg.Top() RA n B
-				switchToParentThread(L, n, false, true)
-				return 1
-			}
 			islast := baseframe == L.stack.Pop() || L.stack.IsEmpty()
 			// +inline-call copyReturnValues L cf.ReturnBase RA n B
 			L.currentFrame = L.stack.Last()

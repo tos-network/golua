@@ -30,12 +30,12 @@ these constraints. This fork applies the same discipline to a Go blockchain node
 
 | Library | Status | Notes |
 |---------|--------|-------|
-| `base` | Modified | Removed `dofile`, `loadfile`, `require`, `module`. Kept `collectgarbage` (calls `runtime.GC()` — pure Go, consensus-safe) |
+| `base` | Modified | Removed `dofile`, `loadfile`, `require`, `module`, `collectgarbage` |
 | `table` | Unchanged | Deterministic |
 | `string` | Unchanged | Deterministic |
 | `math` | Heavily trimmed | Only `max`, `min`, `mod` — all integer-safe |
-| `debug` | Unchanged | Stack introspection only, no I/O |
-| `coroutine` | Unchanged | Cooperative scheduling — fully deterministic |
+| `debug` | Removed | Introspection APIs are removed |
+| `coroutine` | Removed | Coroutine APIs are removed from this fork |
 
 ---
 
@@ -235,18 +235,14 @@ func tosBalance(L *lua.LState) int {
 
 ---
 
-## Context / Timeout
+## Execution Termination
 
-The upstream context cancellation mechanism is preserved and works alongside gas
-metering. Use gas metering for deterministic termination (same limit on every
-validator). Use context only for wall-clock timeouts in off-chain tooling.
+`SetContext`/timeout cancellation is removed in this fork. Execution is terminated
+deterministically by gas accounting only.
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-defer cancel()
-L.SetContext(ctx)
 L.SetGasLimit(10_000_000)
-err := L.DoString(src)
+err := L.DoString(src) // returns "lua: gas limit exceeded" if over budget
 ```
 
 ---
@@ -262,7 +258,6 @@ err := L.DoString(src)
 | `table` | `*lua.LTable` | |
 | `function` | `*lua.LFunction` | |
 | `userdata` | `*lua.LUserData` | for Go-defined types |
-| `thread` | `*lua.LState` | coroutines |
 
 ### Constructing LNumber from Go
 

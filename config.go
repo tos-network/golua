@@ -2,6 +2,7 @@ package lua
 
 import (
 	"os"
+	"strconv"
 )
 
 var CompatVarArg = true
@@ -31,6 +32,9 @@ var LuaExecDir = "!"
 var LuaIgMark = "-"
 
 func init() {
+	if strconv.IntSize != 64 {
+		panic("gopher-lua deterministic VM requires a 64-bit architecture (int size must be 64)")
+	}
 	if os.PathSeparator == '/' { // unix-like
 		LuaOS = "unix"
 		LuaLDir = "/usr/local/share/lua/5.1"

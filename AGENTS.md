@@ -29,6 +29,14 @@ var luaLibs = []luaLib{
 **Do NOT add `CoroutineLibName/OpenCoroutine` or any other library.**
 Coroutines have no Solidity/EVM analog and add non-deterministic execution complexity.
 
+### Engine-level coroutine semantics
+
+Coroutine execution semantics are removed in the VM/runtime layer as well:
+- `ResumeState` / `Resume` / `Yield` APIs must not exist.
+- VM must not contain parent-thread switch/yield-resume flow.
+- `NewThread` API must not exist.
+- `LTThread` type tag must not exist.
+
 ---
 
 ## Functions removed from `baselib.go` (do not restore)
@@ -49,7 +57,7 @@ These are removed from `baseFuncs` and their function bodies deleted:
 
 Default `String()` representations for non-primitive values must NOT include memory
 addresses (`%p`) or any runtime-allocated pointer text.
-Keep them as stable type labels (`"table"`, `"function"`, `"thread"`, `"userdata"`, `"channel"`).
+Keep them as stable type labels (`"table"`, `"function"`, `"userdata"`).
 
 ### Deterministic map handling
 
@@ -109,3 +117,20 @@ Do not change `LNumber` back to `float64`.
 
 `LState` has `gasLimit` / `gasUsed` fields and `SetGasLimit()` / `GasUsed()` methods.
 The VM loop checks gas on every instruction. Do not remove this.
+
+### Context cancellation API
+
+`SetContext` / `Context` / `RemoveContext` are removed.
+Consensus execution must terminate only via gas accounting (or explicit VM/runtime errors),
+never via wall-clock timeouts or host context cancellation.
+
+### Host memory watcher API
+
+`SetMx` is removed.
+Do not add host-driven memory watcher goroutines (`runtime.ReadMemStats` + `time.Sleep` + `os.Exit`)
+back into the VM; consensus termination must stay gas-driven.
+
+### Architecture requirement
+
+This fork hard-requires 64-bit architecture (`strconv.IntSize == 64`).
+Do not remove this startup guard.

@@ -64,8 +64,6 @@ Usage
 GopherLua APIs perform in much the same way as Lua, **but the stack is used only
 for passing arguments and receiving returned values.**
 
-GopherLua supports channel operations. See **"Goroutines"** section.
-
 Import a package.
 
 .. code-block:: go
@@ -117,9 +115,7 @@ Objects implement an LValue interface are
  ``LString``        string                  ``LTString``       ``-``
  ``LFunction``      struct pointer          ``LTFunction``     ``-``
  ``LUserData``      struct pointer          ``LTUserData``     ``-``
- ``LState``         struct pointer          ``LTThread``       ``-``
  ``LTable``         struct pointer          ``LTTable``        ``-``
- ``LChannel``       chan LValue             ``LTChannel``      ``-``
 ================ ========================= ================== =======================
 
 You can test an object type in Go way(type assertion) or using a ``Type()`` value.
@@ -227,7 +223,7 @@ Option defaults
 
 The above examples show how to customize the callstack and registry size on a per ``LState`` basis. You can also adjust some defaults for when options are not specified by altering the values of ``lua.RegistrySize``, ``lua.RegistryGrowStep`` and ``lua.CallStackSize``.
 
-An ``LState`` object that has been created by ``*LState#NewThread()`` inherits the callstack & registry size from the parent ``LState`` object.
+``NewThread`` is removed in this deterministic blockchain fork.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Miscellaneous lua.NewState options
@@ -274,29 +270,7 @@ Any function registered with GopherLua is a ``lua.LGFunction``, defined in ``val
 
    type LGFunction func(*LState) int
 
-Working with coroutines.
-
-.. code-block:: go
-
-   co, _ := L.NewThread() /* create a new thread */
-   fn := L.GetGlobal("coro").(*lua.LFunction) /* get function from lua */
-   for {
-       st, err, values := L.Resume(co, fn)
-       if st == lua.ResumeError {
-           fmt.Println("yield break(error)")
-           fmt.Println(err.Error())
-           break
-       }
-
-       for i, lv := range values {
-           fmt.Printf("%v : %v\n", i, lv)
-       }
-
-       if st == lua.ResumeOK {
-           fmt.Println("yield break(ok)")
-           break
-       }
-   }
+Coroutine APIs are removed in this deterministic blockchain fork.
 
 +++++++++++++++++++++++++++++++++++++++++
 Opening a subset of builtin modules
@@ -492,68 +466,23 @@ You can extend GopherLua with new types written in Go.
 
 +++++++++++++++++++++++++++++++++++++++++
 Terminating a running LState
-+++++++++++++++++++++++++++++++++++++++++
-GopherLua supports the `Go Concurrency Patterns: Context <https://blog.golang.org/context>`_ .
+++++++++++++++++++++++++++++++++++++++++
+In this deterministic blockchain fork, context timeout/cancellation APIs are removed.
+Execution is terminated by gas accounting only.
 
 
 .. code-block:: go
 
     L := lua.NewState()
     defer L.Close()
-    ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-    defer cancel()
-    // set the context to our LState
-    L.SetContext(ctx)
+    L.SetGasLimit(1000000)
     err := L.DoString(`
-      local clock = os.clock
-      function sleep(n)  -- seconds
-        local t0 = clock()
-        while clock() - t0 <= n do end
+      local i = 0
+      while true do
+        i = i + 1
       end
-      sleep(3)
     `)
-    // err.Error() contains "context deadline exceeded"
-
-With coroutines
-
-.. code-block:: go
-
-	L := lua.NewState()
-	defer L.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	L.SetContext(ctx)
-	defer cancel()
-	L.DoString(`
-	    function coro()
-		  local i = 0
-		  while true do
-		    coroutine.yield(i)
-			i = i+1
-		  end
-		  return i
-	    end
-	`)
-	co, cocancel := L.NewThread()
-	defer cocancel()
-	fn := L.GetGlobal("coro").(*LFunction)
-
-	_, err, values := L.Resume(co, fn) // err is nil
-
-	cancel() // cancel the parent context
-
-	_, err, values = L.Resume(co, fn) // err is NOT nil : child context was canceled
-
-**Note that using a context causes performance degradation.**
-
-.. code-block::
-
-    time ./glua-with-context.exe fib.lua
-    9227465
-    0.01s user 0.11s system 1% cpu 7.505 total
-
-    time ./glua-without-context.exe fib.lua
-    9227465
-    0.01s user 0.01s system 0% cpu 5.306 total
+    // err.Error() contains "lua: gas limit exceeded"
 
 +++++++++++++++++++++++++++++++++++++++++
 Sharing Lua byte code between LStates
@@ -612,131 +541,10 @@ Goroutines
 +++++++++++++++++++++++++++++++++++++++++
 The ``LState`` is not goroutine-safe. It is recommended to use one LState per goroutine and communicate between goroutines by using channels.
 
-Channels are represented by ``channel`` objects in GopherLua. And a ``channel`` table provides functions for performing channel operations.
-
-Some objects can not be sent over channels due to having non-goroutine-safe objects inside itself.
-
-- a thread(state)
-- a function
-- an userdata
-- a table with a metatable
-
-You **must not** send these objects from Go APIs to channels.
-
-
-
-.. code-block:: go
-
-    func receiver(ch, quit chan lua.LValue) {
-        L := lua.NewState()
-        defer L.Close()
-        L.SetGlobal("ch", lua.LChannel(ch))
-        L.SetGlobal("quit", lua.LChannel(quit))
-        if err := L.DoString(`
-        local exit = false
-        while not exit do
-          channel.select(
-            {"|<-", ch, function(ok, v)
-              if not ok then
-                print("channel closed")
-                exit = true
-              else
-                print("received:", v)
-              end
-            end},
-            {"|<-", quit, function(ok, v)
-                print("quit")
-                exit = true
-            end}
-          )
-        end
-      `); err != nil {
-            panic(err)
-        }
-    }
-
-    func sender(ch, quit chan lua.LValue) {
-        L := lua.NewState()
-        defer L.Close()
-        L.SetGlobal("ch", lua.LChannel(ch))
-        L.SetGlobal("quit", lua.LChannel(quit))
-        if err := L.DoString(`
-        ch:send("1")
-        ch:send("2")
-      `); err != nil {
-            panic(err)
-        }
-        ch <- lua.LString("3")
-        quit <- lua.LTrue
-    }
-
-    func main() {
-        ch := make(chan lua.LValue)
-        quit := make(chan lua.LValue)
-        go receiver(ch, quit)
-        go sender(ch, quit)
-        time.Sleep(3 * time.Second)
-    }
-
-'''''''''''''''
-Go API
-'''''''''''''''
-
-``ToChannel``, ``CheckChannel``, ``OptChannel`` are available.
-
-Refer to `Go doc(LState methods) <http://godoc.org/github.com/yuin/gopher-lua>`_ for further information.
-
-'''''''''''''''
-Lua API
-'''''''''''''''
-
-- **channel.make([buf:int]) -> ch:channel**
-    - Create new channel that has a buffer size of ``buf``. By default, ``buf`` is 0.
-
-- **channel.select(case:table [, case:table, case:table ...]) -> {index:int, recv:any, ok}**
-    - Same as the ``select`` statement in Go. It returns the index of the chosen case and, if that
-      case was a receive operation, the value received and a boolean indicating whether the channel has been closed.
-    - ``case`` is a table that outlined below.
-        - receiving: `{"|<-", ch:channel [, handler:func(ok, data:any)]}`
-        - sending: `{"<-|", ch:channel, data:any [, handler:func(data:any)]}`
-        - default: `{"default" [, handler:func()]}`
-
-``channel.select`` examples:
-
-.. code-block:: lua
-
-    local idx, recv, ok = channel.select(
-      {"|<-", ch1},
-      {"|<-", ch2}
-    )
-    if not ok then
-        print("closed")
-    elseif idx == 1 then -- received from ch1
-        print(recv)
-    elseif idx == 2 then -- received from ch2
-        print(recv)
-    end
-
-.. code-block:: lua
-
-    channel.select(
-      {"|<-", ch1, function(ok, data)
-        print(ok, data)
-      end},
-      {"<-|", ch2, "value", function(data)
-        print(data)
-      end},
-      {"default", function()
-        print("default action")
-      end}
-    )
-
-- **channel:send(data:any)**
-    - Send ``data`` over the channel.
-- **channel:receive() -> ok:bool, data:any**
-    - Receive some data over the channel.
-- **channel:close()**
-    - Close the channel.
+In this deterministic blockchain fork, channel support is removed:
+- no ``LChannel`` type
+- no channel library
+- no ``ToChannel`` / ``CheckChannel`` / ``OptChannel`` APIs
 
 ''''''''''''''''''''''''''''''
 The LState pool pattern
@@ -811,9 +619,7 @@ Differences between Lua and GopherLua
 Goroutines
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- GopherLua supports channel operations.
-    - GopherLua has a type named ``channel``.
-    - The ``channel`` table provides functions for performing channel operations.
+- Channel support is removed in this deterministic blockchain fork.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Unsupported functions

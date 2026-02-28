@@ -1,13 +1,10 @@
 package lua
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 	"unsafe"
 )
 
@@ -77,57 +74,26 @@ func (fs *flagScanner) Next() (byte, bool) {
 			fs.AppendString(fs.end)
 		}
 		return c, true
-	} else {
-		c = fs.str[fs.Pos]
-		if c == fs.flag {
-			if fs.Pos < (fs.Length-1) && fs.str[fs.Pos+1] == fs.flag {
-				fs.HasFlag = false
-				fs.AppendChar(fs.flag)
-				fs.Pos += 2
-				return fs.Next()
-			} else if fs.Pos != fs.Length-1 {
-				if fs.HasFlag {
-					fs.AppendString(fs.end)
-				}
-				fs.AppendString(fs.start)
-				fs.ChangeFlag = true
-				fs.HasFlag = true
+	}
+
+	c = fs.str[fs.Pos]
+	if c == fs.flag {
+		if fs.Pos < (fs.Length-1) && fs.str[fs.Pos+1] == fs.flag {
+			fs.HasFlag = false
+			fs.AppendChar(fs.flag)
+			fs.Pos += 2
+			return fs.Next()
+		} else if fs.Pos != fs.Length-1 {
+			if fs.HasFlag {
+				fs.AppendString(fs.end)
 			}
+			fs.AppendString(fs.start)
+			fs.ChangeFlag = true
+			fs.HasFlag = true
 		}
 	}
 	fs.Pos++
 	return c, false
-}
-
-var cDateFlagToGo = map[byte]string{
-	'a': "mon", 'A': "Monday", 'b': "Jan", 'B': "January", 'c': "02 Jan 06 15:04 MST", 'd': "02",
-	'F': "2006-01-02", 'H': "15", 'I': "03", 'm': "01", 'M': "04", 'p': "PM", 'P': "pm", 'S': "05",
-	'x': "15/04/05", 'X': "15:04:05", 'y': "06", 'Y': "2006", 'z': "-0700", 'Z': "MST"}
-
-func strftime(t time.Time, cfmt string) string {
-	sc := newFlagScanner('%', "", "", cfmt)
-	for c, eos := sc.Next(); !eos; c, eos = sc.Next() {
-		if !sc.ChangeFlag {
-			if sc.HasFlag {
-				if v, ok := cDateFlagToGo[c]; ok {
-					sc.AppendString(t.Format(v))
-				} else {
-					switch c {
-					case 'w':
-						sc.AppendString(fmt.Sprint(int(t.Weekday())))
-					default:
-						sc.AppendChar('%')
-						sc.AppendChar(c)
-					}
-				}
-				sc.HasFlag = false
-			} else {
-				sc.AppendChar(c)
-			}
-		}
-	}
-
-	return sc.String()
 }
 
 func isInteger(v LNumber) bool {
@@ -142,70 +108,6 @@ func isArrayKey(v LNumber) bool {
 
 func parseNumber(number string) (LNumber, error) {
 	return parseUint256(number)
-}
-
-func popenArgs(arg string) (string, []string) {
-	cmd := "/bin/sh"
-	args := []string{"-c"}
-	if LuaOS == "windows" {
-		cmd = "C:\\Windows\\system32\\cmd.exe"
-		args = []string{"/c"}
-	}
-	args = append(args, arg)
-	return cmd, args
-}
-
-func isGoroutineSafe(lv LValue) bool {
-	switch v := lv.(type) {
-	case *LFunction, *LUserData, *LState:
-		return false
-	case *LTable:
-		return v.Metatable == LNil
-	default:
-		return true
-	}
-}
-
-func readBufioSize(reader *bufio.Reader, size int64) ([]byte, error, bool) {
-	result := []byte{}
-	read := int64(0)
-	var err error
-	var n int
-	for read != size {
-		buf := make([]byte, size-read)
-		n, err = reader.Read(buf)
-		if err != nil {
-			break
-		}
-		read += int64(n)
-		result = append(result, buf[:n]...)
-	}
-	e := err
-	if e != nil && e == io.EOF {
-		e = nil
-	}
-
-	return result, e, len(result) == 0 && err == io.EOF
-}
-
-func readBufioLine(reader *bufio.Reader) ([]byte, error, bool) {
-	result := []byte{}
-	var buf []byte
-	var err error
-	var isprefix bool = true
-	for isprefix {
-		buf, isprefix, err = reader.ReadLine()
-		if err != nil {
-			break
-		}
-		result = append(result, buf...)
-	}
-	e := err
-	if e != nil && e == io.EOF {
-		e = nil
-	}
-
-	return result, e, len(result) == 0 && err == io.EOF
 }
 
 func int2Fb(val int) int {

@@ -1,15 +1,11 @@
 package lua
 
 import (
-	"context"
 	"fmt"
 	"io"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/tos-network/gopher-lua/parse"
 )
@@ -56,18 +52,6 @@ const (
 	ApiErrorRun
 	ApiErrorError
 	ApiErrorPanic
-)
-
-/* }}} */
-
-/* ResumeState {{{ */
-
-type ResumeState int
-
-const (
-	ResumeOK ResumeState = iota
-	ResumeYield
-	ResumeError
 )
 
 /* }}} */
@@ -541,7 +525,6 @@ func newGlobal() *Global {
 		Registry:   newLTable(0, 32),
 		Global:     newLTable(0, 64),
 		builtinMts: make(map[int]LValue),
-		tempFiles:  make([]*os.File, 0, 10),
 	}
 }
 
@@ -564,19 +547,15 @@ func newLState(options Options) *LState {
 	al := newAllocator(32)
 	ls := &LState{
 		G:       newGlobal(),
-		Parent:  nil,
 		Panic:   panicWithTraceback,
 		Dead:    false,
 		Options: options,
 
-		stop:         0,
 		alloc:        al,
 		currentFrame: nil,
-		wrapped:      false,
 		uvcache:      nil,
 		hasErrorFunc: false,
 		mainLoop:     mainLoop,
-		ctx:          nil,
 	}
 	if options.MinimizeStackMemory {
 		ls.stack = newAutoGrowingCallFrameStack(options.CallStackSize)
@@ -739,11 +718,7 @@ func (ls *LState) rawFrameFuncName(fr *callFrame) string {
 func (ls *LState) frameFuncName(fr *callFrame) (string, bool) {
 	frame := fr.Parent
 	if frame == nil {
-		if ls.Parent == nil {
-			return "main chunk", true
-		} else {
-			return "corountine", true
-		}
+		return "main chunk", true
 	}
 	if !frame.Fn.IsG {
 		pc := frame.Pc - 1
@@ -769,9 +744,6 @@ func (ls *LState) isStarted() bool {
 
 func (ls *LState) kill() {
 	ls.Dead = true
-	if ls.ctxCancelFn != nil {
-		ls.ctxCancelFn()
-	}
 }
 
 func (ls *LState) indexToReg(idx int) int {
@@ -1227,12 +1199,6 @@ func (ls *LState) IsClosed() bool {
 }
 
 func (ls *LState) Close() {
-	atomic.AddInt32(&ls.stop, 1)
-	for _, file := range ls.G.tempFiles {
-		// ignore errors in these operations
-		file.Close()
-		os.Remove(file.Name())
-	}
 	ls.stack.FreeAll()
 	ls.stack = nil
 }
@@ -1397,21 +1363,6 @@ func (ls *LState) CreateTable(acap, hcap int) *LTable {
 	return newLTable(acap, hcap)
 }
 
-// NewThread returns a new LState that shares with the original state all global objects.
-// If the original state has context.Context, the new state has a new child context of the original state and this function returns its cancel function.
-func (ls *LState) NewThread() (*LState, context.CancelFunc) {
-	thread := newLState(ls.Options)
-	thread.G = ls.G
-	thread.Env = ls.Env
-	var f context.CancelFunc = nil
-	if ls.ctx != nil {
-		thread.mainLoop = mainLoopWithContext
-		thread.ctx, f = context.WithCancel(ls.ctx)
-		thread.ctxCancelFn = f
-	}
-	return thread, f
-}
-
 func (ls *LState) NewFunctionFromProto(proto *FunctionProto) *LFunction {
 	return newLFunctionL(proto, ls.Env, int(proto.NumUpvalues))
 }
@@ -1503,13 +1454,6 @@ func (ls *LState) ToFunction(n int) *LFunction {
 
 func (ls *LState) ToUserData(n int) *LUserData {
 	if lv, ok := ls.Get(n).(*LUserData); ok {
-		return lv
-	}
-	return nil
-}
-
-func (ls *LState) ToThread(n int) *LState {
-	if lv, ok := ls.Get(n).(*LState); ok {
 		return lv
 	}
 	return nil
@@ -1667,8 +1611,6 @@ func (ls *LState) GetFEnv(obj LValue) LValue {
 		return lv.Env
 	case *LUserData:
 		return lv.Env
-	case *LState:
-		return lv.Env
 	}
 	return LNil
 }
@@ -1683,8 +1625,6 @@ func (ls *LState) SetFEnv(obj LValue, env LValue) {
 	case *LFunction:
 		lv.Env = tb
 	case *LUserData:
-		lv.Env = tb
-	case *LState:
 		lv.Env = tb
 	}
 	/* do nothing */
@@ -1939,149 +1879,7 @@ func (ls *LState) SetMetatable(obj LValue, mt LValue) {
 
 /* }}} */
 
-/* coroutine operations {{{ */
-
-func (ls *LState) Status(th *LState) string {
-	status := "suspended"
-	if th.Dead {
-		status = "dead"
-	} else if ls.G.CurrentThread == th {
-		status = "running"
-	} else if ls.Parent == th {
-		status = "normal"
-	}
-	return status
-}
-
-func (ls *LState) Resume(th *LState, fn *LFunction, args ...LValue) (ResumeState, error, []LValue) {
-	isstarted := th.isStarted()
-	if !isstarted {
-		base := 0
-		th.stack.Push(callFrame{
-			Fn:         fn,
-			Pc:         0,
-			Base:       base,
-			LocalBase:  base + 1,
-			ReturnBase: base,
-			NArgs:      0,
-			NRet:       MultRet,
-			Parent:     nil,
-			TailCall:   0,
-		})
-	}
-
-	if ls.G.CurrentThread == th {
-		return ResumeError, newApiErrorS(ApiErrorRun, "can not resume a running thread"), nil
-	}
-	if th.Dead {
-		return ResumeError, newApiErrorS(ApiErrorRun, "can not resume a dead thread"), nil
-	}
-	th.Parent = ls
-	ls.G.CurrentThread = th
-	if !isstarted {
-		cf := th.stack.Last()
-		th.currentFrame = cf
-		th.SetTop(0)
-		for _, arg := range args {
-			th.Push(arg)
-		}
-		cf.NArgs = len(args)
-		th.initCallFrame(cf)
-		th.Panic = panicWithoutTraceback
-	} else {
-		for _, arg := range args {
-			th.Push(arg)
-		}
-	}
-	top := ls.GetTop()
-	threadRun(th)
-	haserror := LVIsFalse(ls.Get(top + 1))
-	ret := make([]LValue, 0, ls.GetTop())
-	for idx := top + 2; idx <= ls.GetTop(); idx++ {
-		ret = append(ret, ls.Get(idx))
-	}
-	if len(ret) == 0 {
-		ret = append(ret, LNil)
-	}
-	ls.SetTop(top)
-
-	if haserror {
-		return ResumeError, newApiError(ApiErrorRun, ret[0]), nil
-	} else if th.stack.IsEmpty() {
-		return ResumeOK, nil, ret
-	}
-	return ResumeYield, nil, ret
-}
-
-func (ls *LState) Yield(values ...LValue) int {
-	ls.SetTop(0)
-	for _, lv := range values {
-		ls.Push(lv)
-	}
-	return -1
-}
-
-func (ls *LState) XMoveTo(other *LState, n int) {
-	if ls == other {
-		return
-	}
-	top := ls.GetTop()
-	n = intMin(n, top)
-	for i := n; i > 0; i-- {
-		other.Push(ls.Get(top - i + 1))
-	}
-	ls.SetTop(top - n)
-}
-
-/* }}} */
-
 /* GopherLua original APIs {{{ */
-
-// Set maximum memory size. This function can only be called from the main thread.
-func (ls *LState) SetMx(mx int) {
-	if ls.Parent != nil {
-		ls.RaiseError("sub threads are not allowed to set a memory limit")
-	}
-	go func() {
-		limit := uint64(mx * 1024 * 1024) //MB
-		var s runtime.MemStats
-		for atomic.LoadInt32(&ls.stop) == 0 {
-			runtime.ReadMemStats(&s)
-			if s.Alloc >= limit {
-				fmt.Println("out of memory")
-				os.Exit(3)
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
-}
-
-// SetContext set a context ctx to this LState. The provided ctx must be non-nil.
-func (ls *LState) SetContext(ctx context.Context) {
-	ls.mainLoop = mainLoopWithContext
-	ls.ctx = ctx
-}
-
-// Context returns the LState's context. To change the context, use WithContext.
-func (ls *LState) Context() context.Context {
-	return ls.ctx
-}
-
-// RemoveContext removes the context associated with this LState and returns this context.
-func (ls *LState) RemoveContext() context.Context {
-	oldctx := ls.ctx
-	ls.mainLoop = mainLoop
-	ls.ctx = nil
-	return oldctx
-}
-
-// Converts the Lua value at the given acceptable index to the chan LValue.
-func (ls *LState) ToChannel(n int) chan LValue {
-	if lv, ok := ls.Get(n).(LChannel); ok {
-		return (chan LValue)(lv)
-	}
-	return nil
-}
 
 // RemoveCallerFrame removes the stack frame above the current stack frame. This is useful in tail calls. It returns
 // the new current frame.

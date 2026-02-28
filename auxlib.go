@@ -100,15 +100,6 @@ func (ls *LState) CheckUserData(n int) *LUserData {
 	return nil
 }
 
-func (ls *LState) CheckThread(n int) *LState {
-	v := ls.Get(n)
-	if lv, ok := v.(*LState); ok {
-		return lv
-	}
-	ls.TypeError(n, LTThread)
-	return nil
-}
-
 func (ls *LState) CheckType(n int, typ LValueType) {
 	v := ls.Get(n)
 	if v.Type() != typ {
@@ -407,29 +398,6 @@ func (ls *LState) PreloadModule(name string, loader LGFunction) {
 		ls.RaiseError("package.preload must be a table")
 	}
 	ls.SetField(preload, name, ls.NewFunction(loader))
-}
-
-// Checks whether the given index is an LChannel and returns this channel.
-func (ls *LState) CheckChannel(n int) chan LValue {
-	v := ls.Get(n)
-	if ch, ok := v.(LChannel); ok {
-		return (chan LValue)(ch)
-	}
-	ls.TypeError(n, LTChannel)
-	return nil
-}
-
-// If the given index is a LChannel, returns this channel. If this argument is absent or is nil, returns ch. Otherwise, raises an error.
-func (ls *LState) OptChannel(n int, ch chan LValue) chan LValue {
-	v := ls.Get(n)
-	if v == LNil {
-		return ch
-	}
-	if ch, ok := v.(LChannel); ok {
-		return (chan LValue)(ch)
-	}
-	ls.TypeError(n, LTChannel)
-	return nil
 }
 
 /* }}} */

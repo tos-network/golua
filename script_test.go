@@ -12,8 +12,6 @@ import (
 	"github.com/tos-network/gopher-lua/parse"
 )
 
-const maxMemory = 40
-
 var gluaTests []string = []string{
 	// "base.lua",      -- uses dofile (removed)
 	// "coroutine.lua", -- coroutine lib removed
@@ -77,7 +75,6 @@ func testScriptDir(t *testing.T, tests []string, directory string) {
 			CallStackSize:       1024,
 			IncludeGoStackTrace: true,
 		})
-		L.SetMx(maxMemory)
 		src, err := os.ReadFile(script)
 		if err != nil {
 			t.Error(err)

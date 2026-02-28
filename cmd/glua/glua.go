@@ -19,24 +19,21 @@ func main() {
 func mainAux() int {
 	var opt_e, opt_l, opt_p string
 	var opt_i, opt_v, opt_dt, opt_dc bool
-	var opt_m int
 	flag.StringVar(&opt_e, "e", "", "")
 	flag.StringVar(&opt_l, "l", "", "")
 	flag.StringVar(&opt_p, "p", "", "")
-	flag.IntVar(&opt_m, "mx", 0, "")
 	flag.BoolVar(&opt_i, "i", false, "")
 	flag.BoolVar(&opt_v, "v", false, "")
 	flag.BoolVar(&opt_dt, "dt", false, "")
 	flag.BoolVar(&opt_dc, "dc", false, "")
 	flag.Usage = func() {
 		fmt.Println(`Usage: glua [options] [script [args]].
-Available options are:
-  -e stat  execute string 'stat'
-  -l name  require library 'name'
-  -mx MB   memory limit(default: unlimited)
-  -dt      dump AST trees
-  -dc      dump VM codes
-  -i       enter interactive mode after executing 'script'
+	Available options are:
+	  -e stat  execute string 'stat'
+	  -l name  require library 'name'
+	  -dt      dump AST trees
+	  -dc      dump VM codes
+	  -i       enter interactive mode after executing 'script'
   -p file  write cpu profiles to the file
   -v       show version information`)
 	}
@@ -58,9 +55,6 @@ Available options are:
 
 	L := lua.NewState()
 	defer L.Close()
-	if opt_m > 0 {
-		L.SetMx(opt_m)
-	}
 
 	if opt_v || opt_i {
 		fmt.Println(lua.PackageCopyRight)

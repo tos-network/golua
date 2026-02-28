@@ -1,10 +1,8 @@
 package lua
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestLStateIsClosed(t *testing.T) {
@@ -238,18 +236,6 @@ func TestToUserData(t *testing.T) {
 	errorIfNotEqual(t, L.Get(3), L.ToUserData(3))
 }
 
-func TestToChannel(t *testing.T) {
-	L := NewState()
-	defer L.Close()
-	L.Push(lNumberFromInt(10))
-	L.Push(LString("99.9"))
-	var ch chan LValue
-	L.Push(LChannel(ch))
-	errorIfFalse(t, L.ToChannel(1) == nil, "index 1 must be nil")
-	errorIfFalse(t, L.ToChannel(2) == nil, "index 2 must be nil")
-	errorIfNotEqual(t, ch, L.ToChannel(3))
-}
-
 func TestObjLen(t *testing.T) {
 	L := NewState()
 	defer L.Close()
@@ -327,150 +313,10 @@ func TestPCall(t *testing.T) {
 
 func TestCoroutineApi1(t *testing.T) {
 	t.Skip("coroutine library removed")
-	L := NewState()
-	defer L.Close()
-	co, _ := L.NewThread()
-	errorIfScriptFail(t, L, `
-      function coro(v)
-        assert(v == 10)
-        local ret1, ret2 = coroutine.yield(1,2,3)
-        assert(ret1 == 11)
-        assert(ret2 == 12)
-        coroutine.yield(4)
-        return 5
-      end
-    `)
-	fn := L.GetGlobal("coro").(*LFunction)
-	st, err, values := L.Resume(co, fn, lNumberFromInt(10))
-	errorIfNotEqual(t, ResumeYield, st)
-	errorIfNotNil(t, err)
-	errorIfNotEqual(t, 3, len(values))
-	errorIfNotEqual(t, lNumberFromInt(1), values[0].(LNumber))
-	errorIfNotEqual(t, lNumberFromInt(2), values[1].(LNumber))
-	errorIfNotEqual(t, lNumberFromInt(3), values[2].(LNumber))
-
-	st, err, values = L.Resume(co, fn, lNumberFromInt(11), lNumberFromInt(12))
-	errorIfNotEqual(t, ResumeYield, st)
-	errorIfNotNil(t, err)
-	errorIfNotEqual(t, 1, len(values))
-	errorIfNotEqual(t, lNumberFromInt(4), values[0].(LNumber))
-
-	st, err, values = L.Resume(co, fn)
-	errorIfNotEqual(t, ResumeOK, st)
-	errorIfNotNil(t, err)
-	errorIfNotEqual(t, 1, len(values))
-	errorIfNotEqual(t, lNumberFromInt(5), values[0].(LNumber))
-
-	L.Register("myyield", func(L *LState) int {
-		return L.Yield(L.ToNumber(1))
-	})
-	errorIfScriptFail(t, L, `
-      function coro_error()
-        coroutine.yield(1,2,3)
-        myyield(4)
-        assert(false, "--failed--")
-      end
-    `)
-	fn = L.GetGlobal("coro_error").(*LFunction)
-	co, _ = L.NewThread()
-	st, err, values = L.Resume(co, fn)
-	errorIfNotEqual(t, ResumeYield, st)
-	errorIfNotNil(t, err)
-	errorIfNotEqual(t, 3, len(values))
-	errorIfNotEqual(t, lNumberFromInt(1), values[0].(LNumber))
-	errorIfNotEqual(t, lNumberFromInt(2), values[1].(LNumber))
-	errorIfNotEqual(t, lNumberFromInt(3), values[2].(LNumber))
-
-	st, err, values = L.Resume(co, fn)
-	errorIfNotEqual(t, ResumeYield, st)
-	errorIfNotNil(t, err)
-	errorIfNotEqual(t, 1, len(values))
-	errorIfNotEqual(t, lNumberFromInt(4), values[0].(LNumber))
-
-	st, err, values = L.Resume(co, fn)
-	errorIfNotEqual(t, ResumeError, st)
-	errorIfNil(t, err)
-	errorIfFalse(t, strings.Contains(err.Error(), "--failed--"), "error message must be '--failed--'")
-	st, err, values = L.Resume(co, fn)
-	errorIfNotEqual(t, ResumeError, st)
-	errorIfNil(t, err)
-	errorIfFalse(t, strings.Contains(err.Error(), "can not resume a dead thread"), "can not resume a dead thread")
-
-}
-
-func TestContextTimeout(t *testing.T) {
-	L := NewState()
-	defer L.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	L.SetContext(ctx)
-	errorIfNotEqual(t, ctx, L.Context())
-	err := L.DoString(`
-      local function spin(n)
-        local i = 0
-        while i < n do i = i + 1 end
-      end
-      spin(1000000000)
-	`)
-	errorIfNil(t, err)
-	errorIfFalse(t, strings.Contains(err.Error(), "context deadline exceeded"), "execution must be canceled")
-
-	oldctx := L.RemoveContext()
-	errorIfNotEqual(t, ctx, oldctx)
-	errorIfNotNil(t, L.ctx)
-}
-
-func TestContextCancel(t *testing.T) {
-	L := NewState()
-	defer L.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	errch := make(chan error, 1)
-	L.SetContext(ctx)
-	go func() {
-		errch <- L.DoString(`
-          local function spin(n)
-            local i = 0
-            while i < n do i = i + 1 end
-          end
-          spin(1000000000)
-	  `)
-	}()
-	time.Sleep(1 * time.Second)
-	cancel()
-	err := <-errch
-	errorIfNil(t, err)
-	errorIfFalse(t, strings.Contains(err.Error(), "context canceled"), "execution must be canceled")
 }
 
 func TestContextWithCroutine(t *testing.T) {
-	t.Skip("coroutine library removed")
-	L := NewState()
-	defer L.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	L.SetContext(ctx)
-	defer cancel()
-	L.DoString(`
-	    function coro()
-		  local i = 0
-		  while true do
-		    coroutine.yield(i)
-			i = i+1
-		  end
-		  return i
-	    end
-	`)
-	co, cocancel := L.NewThread()
-	defer cocancel()
-	fn := L.GetGlobal("coro").(*LFunction)
-	_, err, values := L.Resume(co, fn)
-	errorIfNotNil(t, err)
-	errorIfNotEqual(t, lNumberFromInt(0), values[0])
-	// cancel the parent context
-	cancel()
-	_, err, values = L.Resume(co, fn)
-	errorIfNil(t, err)
-	errorIfFalse(t, strings.Contains(err.Error(), "context canceled"), "coroutine execution must be canceled when the parent context is canceled")
-
+	t.Skip("context API removed; coroutine library removed")
 }
 
 func TestPCallAfterFail(t *testing.T) {
@@ -560,9 +406,6 @@ func TestUninitializedVarAccess(t *testing.T) {
 	// be 128 for the padding amount in the test function to work. If it's larger, we will need
 	// more padding to force the error.
 	errorIfNotEqual(t, cap(L.reg.array), 128)
-	ctx, cancel := context.WithCancel(context.Background())
-	L.SetContext(ctx)
-	defer cancel()
 	errorIfScriptFail(t, L, `
 		local function test(arg1, arg2, arg3)
 			-- padding to cause a registry resize when the local vars for this func are reserved

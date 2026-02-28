@@ -17,8 +17,6 @@ const (
 	MathLibName = "math"
 	// DebugLibName is the name of the debug Library.
 	DebugLibName = "debug"
-	// ChannelLibName is the name of the channel Library.
-	ChannelLibName = "channel"
 	// CoroutineLibName is the name of the coroutine Library.
 	CoroutineLibName = "coroutine"
 )
