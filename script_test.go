@@ -146,7 +146,7 @@ func TestGlua(t *testing.T) {
 }
 
 func TestLua(t *testing.T) {
-	testScriptDir(t, luaTests, "_lua5.1-tests")
+	testScriptDir(t, luaTests, "_lua54-subset-test")
 }
 
 func TestMergingLoadNilBug(t *testing.T) {

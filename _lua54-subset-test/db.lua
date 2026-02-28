@@ -1,0 +1,5 @@
+assert(type({}) == "table")
+assert(type(function() end) == "function")
+assert(tostring({}) == "table")
+assert(tostring(function() end) == "function")
+assert(debug == nil)

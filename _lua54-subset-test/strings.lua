@@ -1,0 +1,21 @@
+assert(string.len("abc") == 3)
+assert(string.sub("abcdef", 2, 4) == "bcd")
+assert(string.upper("ab") == "AB")
+assert(string.lower("AB") == "ab")
+assert(string.rep("xy", 3) == "xyxyxy")
+assert(string.reverse("abc") == "cba")
+
+local i, j = string.find("hello world", "world", 1, true)
+assert(i == 7 and j == 11)
+
+local out, n = string.gsub("a-b-c", "-", "/")
+assert(out == "a/b/c" and n == 2)
+assert(string.match("abc123", "%d%d%d") == "123")
+assert(string.char(65, 66, 67) == "ABC")
+assert(string.byte("ABC", 2) == 66)
+assert(string.format("%d-%s", 12, "ok") == "12-ok")
+
+local ok = pcall(function()
+  return string.format("%f", 1)
+end)
+assert(ok == false)

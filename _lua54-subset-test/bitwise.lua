@@ -1,0 +1,8 @@
+local max = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+assert((0xF0 | 0x0F) == 0xFF)
+assert((0xF0 & 0x0F) == 0)
+assert((0xAA ~ 0xFF) == 0x55)
+assert((1 << 8) == 256)
+assert((256 >> 8) == 1)
+assert((~0) == max)
+assert((0xF0 | 0xCC ~ 0xAA & 0xFD) == 0xF4)

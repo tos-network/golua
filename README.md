@@ -1,306 +1,137 @@
-# gopher-lua — Blockchain-Safe Lua for TOS
+# gopher-lua - Blockchain-Safe Deterministic Lua
 
-A fork of [gopher-lua](https://github.com/yuin/gopher-lua) hardened for execution
-inside a Byzantine-fault-tolerant blockchain (TOS). Every validator must produce
-**identical results** from identical inputs; the original library's I/O, randomness,
-channel primitives, and floating-point arithmetic make that impossible — they are
-removed or replaced here.
+A hardened fork of [gopher-lua](https://github.com/yuin/gopher-lua) for
+blockchain and other consensus-critical runtimes.
 
-Redis has run a sandboxed Lua engine in production for over a decade under exactly
-these constraints. This fork applies the same discipline to a Go blockchain node.
+This project prioritizes two properties:
 
----
+1. Determinism: identical input must produce identical output on all nodes.
+2. Security: contract code must not access host resources or dynamic loaders.
 
-## What was removed and why
+The runtime is adapted to a Lua 5.4-oriented contract subset while keeping the
+Go embedding model of gopher-lua.
 
-| Removed | Reason |
-|---------|--------|
-| `io` library | File open/read/write — non-deterministic across nodes |
-| `os` library | `os.time`, `os.clock`, `os.execute`, `os.exit` — wall-clock and syscalls |
-| `loadlib` / `require` / `module` | Filesystem module loading — arbitrary code injection |
-| `channel` library | `reflect.Select` on goroutines — non-deterministic scheduling |
-| `math.random` / `math.randomseed` | PRNG seeded from runtime entropy — non-deterministic |
-| `dofile` / `loadfile` | Filesystem execution from Lua scripts |
-| `LState.DoFile` / `LState.LoadFile` | Go-level file loader methods |
-| Float-point arithmetic | `float64` is non-deterministic across CPU/platform; replaced by arbitrary-precision integers |
-| Most `math` functions | Trig, exp, log, pow, sqrt, etc. — all float-based, all removed |
-| `math.pi` / `math.huge` | Float constants — removed |
+## Deterministic and Security Changes
 
-## What was kept
+The following host-dependent or non-deterministic surfaces are removed:
 
-| Library | Status | Notes |
-|---------|--------|-------|
-| `base` | Modified | Removed `dofile`, `loadfile`, `require`, `module`, `collectgarbage` |
-| `table` | Unchanged | Deterministic |
-| `string` | Unchanged | Deterministic |
-| `math` | Heavily trimmed | Only `max`, `min`, `mod` — all integer-safe |
-| `debug` | Removed | Introspection APIs are removed |
-| `coroutine` | Removed | Coroutine APIs are removed from this fork |
+- `io` library
+- `os` library
+- `loadlib` / `require` / `module`
+- channel library
+- debug library
+- coroutine library
+- `math.random` / `math.randomseed`
+- `dofile` / `loadfile`
+- `string.dump`
+- context timeout cancellation (`SetContext`/`Context`/`RemoveContext`)
 
----
+Execution termination is gas-driven only.
 
-## Integer-Only Numbers (`LNumber`)
+## Numeric Model: uint256 Integer-Only
 
-Lua normally uses `float64` for all numbers. This fork replaces the numeric type
-with **arbitrary-precision integers** backed by `math/big.Int`.
+`LNumber` is no longer `float64`. It is defined as `type LNumber string` with
+uint256 semantics backed by `math/big.Int` internally.
 
-### Why not float64?
+- Range: `0 .. 2^256-1`
+- Overflow/underflow: wrapped modulo `2^256`
+- Division: integer division
+- No floating-point arithmetic in VM
+- Float/scientific literals are rejected at compile time (`3.14`, `1e5`)
 
-`float64` cannot exactly represent wei-denominated balances:
+`tonumber` accepts integer strings (`10`, `0xff`) and rejects float forms.
 
-```
-1 TOS = 10¹⁸ wei
-float64 max exact integer ≈ 9 × 10¹⁵  →  loses precision above ~9 TOS
-FPMM invariant product ≈ pool_yes × pool_no  →  can exceed 10³⁶
-```
+## Lua 5.4-Oriented Language Alignment
 
-### Why not uint64?
+This fork includes key Lua 5.4 language features needed for contracts:
 
-`uint64` max ≈ 1.8 × 10¹⁹ — only ~18 TOS in wei units, insufficient for realistic
-pool and treasury balances.
+- bitwise operators: `& | ~ << >>`
+- floor division: `//`
+- `goto`
+- local variable attributes: `<const>`, `<close>`
+- string escapes: `\u{...}`, `\z`
 
-### The solution: string-backed big.Int
+Compatibility target is a curated, deterministic subset, not full stock Lua 5.4
+standard-library parity.
 
-`LNumber` is now defined as `type LNumber string`. The decimal string is the
-canonical representation; all arithmetic converts to `*big.Int`, operates, and
-converts back:
+## Built-in Libraries
 
-```lua
-local bal  = tos.balance(tos.caller())   -- "1000000000000000000" (1 TOS in wei)
-local half = bal / 2                     -- "500000000000000000"
-local fee  = bal * 3 / 1000             -- "3000000000000000"
-```
+Kept:
 
-### Arithmetic rules
+- base (restricted)
+- table
+- string
+- math (integer-safe subset)
 
-| Operation | Behaviour |
-|-----------|-----------|
-| `+` `-` `*` | Exact big integer arithmetic — no overflow |
-| `/` | Integer division, truncates toward zero (`7/2 == 3`) |
-| `%` | Integer modulo, sign follows divisor |
-| `^` | **Removed** — raises a runtime error |
-| Negative numbers | Supported (`-1`, `-n`) |
-| Float literals | **Rejected** at parse time (`3.14`, `1e5` are syntax errors) |
+Removed:
 
-### Math library (trimmed)
-
-Only three functions remain in `math`:
-
-| Function | Description |
-|----------|-------------|
-| `math.max(a, b, ...)` | Largest argument |
-| `math.min(a, b, ...)` | Smallest argument |
-| `math.mod(a, b)` | Same as `a % b` |
-
-All trigonometric, exponential, logarithmic, and rounding functions are removed.
-The constants `math.pi` and `math.huge` are removed.
-
-### `tonumber` behaviour
-
-`tonumber` accepts only integer strings. Float strings are rejected:
-
-```lua
-tonumber("42")    -- 42
-tonumber("0xff")  -- 255
-tonumber("3.14")  -- nil  (rejected)
-tonumber("1e5")   -- nil  (rejected)
-```
-
----
+- io
+- os
+- debug
+- coroutine
+- channel
 
 ## Gas Metering
 
-Every blockchain transaction has a gas budget. Scripts that loop forever must be
-killed before they stall a validator. Gas metering counts VM instructions and
-aborts execution when the budget is exhausted.
-
-### API
+Instruction-level gas metering is built into VM execution.
 
 ```go
 L := lua.NewState()
 defer L.Close()
 
-// Set the gas limit before running any script.
-// Zero means unlimited (default, for trusted internal use).
 L.SetGasLimit(1_000_000)
-
 err := L.DoString(src)
 if err != nil {
-    // err.Error() contains "lua: gas limit exceeded" if the budget ran out
+    // contains "lua: gas limit exceeded" when budget is exhausted
 }
-
-// How many instructions were consumed:
-fmt.Println("gas used:", L.GasUsed())
+used := L.GasUsed()
+_ = used
 ```
 
-`SetGasLimit` resets `GasUsed` to zero. Call it once per transaction, before
-`DoString`.
+## Embedding Host Primitives
 
-### Error string
-
-When the gas budget is exceeded the VM raises:
-
-```
-lua: gas limit exceeded
-```
-
-The TOS executor catches this string and maps it to `ErrIntrinsicGas`.
-
----
-
-## Injecting Host Primitives
-
-Lua scripts interact with the blockchain through Go functions registered as a
-module. This is the standard gopher-lua `LGFunction` + `RegisterModule` pattern —
-no changes to the VM required.
+Expose deterministic host APIs through registered modules/functions.
 
 ```go
 L := lua.NewState()
 defer L.Close()
-L.SetGasLimit(gasRemaining)
 
-L.RegisterModule("tos", map[string]lua.LGFunction{
-    "get":      tosGet,      // read contract storage
-    "set":      tosSet,      // write contract storage
-    "transfer": tosTransfer, // transfer TOS between accounts
-    "balance":  tosBalance,  // query TOS balance
-    "caller":   tosCaller,   // msg.From address
-    "value":    tosValue,    // msg.Value in wei
+L.RegisterModule("chain", map[string]lua.LGFunction{
+    "get": getStorage,
+    "set": setStorage,
 })
 
-if err := L.DoString(string(contractSource)); err != nil {
-    // handle error
+if err := L.DoString(`
+    local v = chain.get("k")
+    chain.set("k", (v or 0) + 1)
+`); err != nil {
+    panic(err)
 }
 ```
 
-A Lua contract calling these primitives looks like:
+## Running Tests
 
-```lua
-local bal = tos.balance(tos.caller())
-local min_bal = 1000000000000000000   -- 1 TOS in wei
-tos.require(bal >= min_bal, "insufficient balance")
-tos.set("initialized", "1")
-tos.transfer("0x...", "500000000000000000")
+Project tests:
+
+```bash
+go test ./...
 ```
 
-Note: all balance comparisons are exact integer comparisons — no float rounding.
+Lua 5.4 subset compatibility tests:
 
----
-
-## Running Scripts
-
-Scripts are always passed as strings (source code stored on-chain via `code_put_ttl`).
-There is no file loading — use `DoString`:
-
-```go
-L := lua.NewState()
-defer L.Close()
-L.SetGasLimit(500_000)
-
-err := L.DoString(`
-    local x = 0
-    for i = 1, 100 do
-        x = x + i
-    end
-    tos.set("result", tostring(x))
-`)
+```bash
+make lua54-subset-test
 ```
 
----
-
-## Calling Go from Lua
-
-Any Go function can be exposed to Lua as an `LGFunction`:
-
-```go
-func myFunc(L *lua.LState) int {
-    arg := L.CheckString(1)   // get first argument
-    L.Push(lua.LString("hello " + arg))  // push return value
-    return 1                  // number of return values
-}
-
-L.SetGlobal("myFunc", L.NewFunction(myFunc))
-```
-
-To push a numeric result, use `lua.LNumber`:
-
-```go
-func tosBalance(L *lua.LState) int {
-    addr := L.CheckString(1)
-    wei := getBalanceWei(addr)          // returns *big.Int
-    L.Push(lua.LNumber(wei.String()))   // push as decimal string
-    return 1
-}
-```
-
----
-
-## Execution Termination
-
-`SetContext`/timeout cancellation is removed in this fork. Execution is terminated
-deterministically by gas accounting only.
-
-```go
-L.SetGasLimit(10_000_000)
-err := L.DoString(src) // returns "lua: gas limit exceeded" if over budget
-```
-
----
-
-## Data Types
-
-| Lua type | Go type | Notes |
-|----------|---------|-------|
-| `nil` | `lua.LNil` | constant |
-| `bool` | `lua.LBool` | `lua.LTrue`, `lua.LFalse` |
-| `number` | `lua.LNumber` | `string` containing a decimal integer; backed by `math/big.Int` |
-| `string` | `lua.LString` | `string` |
-| `table` | `*lua.LTable` | |
-| `function` | `*lua.LFunction` | |
-| `userdata` | `*lua.LUserData` | for Go-defined types |
-
-### Constructing LNumber from Go
-
-```go
-// From an int
-lua.LNumber("42")
-
-// From a *big.Int
-lua.LNumber(bigIntValue.String())
-
-// From a wei amount
-wei := new(big.Int).Mul(big.NewInt(5), params.TOS)  // 5 TOS in wei
-lua.LNumber(wei.String())
-```
-
----
-
-## LState Options
-
-```go
-L := lua.NewState(lua.Options{
-    RegistrySize:        1024 * 20,
-    RegistryMaxSize:     1024 * 80,
-    RegistryGrowStep:    32,
-    CallStackSize:       256,
-    SkipOpenLibs:        false,
-    IncludeGoStackTrace: false,
-})
-```
-
----
+The test suite is stored in `./_lua54-subset-test` and controlled by
+`manifest.tsv` (runtime/compile modes).
 
 ## glua CLI
-
-A minimal REPL / script runner for local testing (not for on-chain use):
 
 ```bash
 go build ./cmd/glua
 ./glua script.lua
-./glua -e 'print(1000000000000000000 + 1)'
 ```
-
----
 
 ## Module
 
@@ -309,4 +140,3 @@ github.com/tos-network/gopher-lua
 ```
 
 Forked from [yuin/gopher-lua](https://github.com/yuin/gopher-lua) (MIT).
-Modifications © TOS Network, MIT License.

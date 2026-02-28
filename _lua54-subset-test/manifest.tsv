@@ -1,0 +1,34 @@
+# mode	file	reason
+runtime	all.lua	core base-library and tonumber behavior
+runtime	api.lua	raw api, pcall, xpcall behavior
+runtime	attrib.lua	local <const> and <close> semantics
+runtime	big.lua	uint256 boundary and wrap-around arithmetic
+runtime	bitwise.lua	bitwise operators and precedence
+runtime	bwcoercion.lua	integer coercion and metamethod behavior
+runtime	calls.lua	function/method/call metamethod calls
+runtime	closure.lua	closure upvalue capture
+runtime	code.lua	control flow and numeric for-loop
+runtime	constructs.lua	while/repeat/goto constructs
+compile	coroutine.lua	parse+compile smoke only (runtime coroutine lib removed)
+compile	cstack.lua	parse+compile smoke only (runtime debug/coroutine removed)
+runtime	db.lua	stable type/string labels and removed debug lib
+runtime	errors.lua	error and protected-call behavior
+runtime	events.lua	metamethod events (__index/__newindex/__call/__add)
+runtime	files.lua	removed host IO/OS/package surface
+compile	gc.lua	parse+compile smoke only (runtime collectgarbage/debug removed)
+compile	gengc.lua	parse+compile smoke only (runtime collectgarbage/debug removed)
+compile	goto.lua	parse+compile smoke only (runtime debug removed)
+compile	heavy.lua	parse+compile smoke only (runtime io/print/collectgarbage removed)
+runtime	literals.lua	integer literals and Lua 5.4 string escapes in supported range
+runtime	locals.lua	local scope and shadowing
+compile	main.lua	parse+compile smoke only (runtime io/os/package removed)
+runtime	math.lua	integer math library semantics
+runtime	nextvar.lua	next/pairs/ipairs traversal behavior
+compile	pm.lua	parse+compile smoke only (runtime print removed)
+runtime	sort.lua	table.sort behavior
+runtime	strings.lua	string library behavior and float-format rejection
+runtime	tpack.lua	unpack/select/vararg packing behavior
+compile	tracegc.lua	parse+compile smoke only (runtime io.stderr removed)
+runtime	utf8.lua	unicode escapes without utf8 library
+runtime	vararg.lua	vararg/select semantics
+runtime	verybig.lua	very-large uint256 arithmetic and shifts

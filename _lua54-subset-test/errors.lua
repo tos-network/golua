@@ -1,0 +1,13 @@
+local ok, err = pcall(function()
+  error("e1")
+end)
+assert(ok == false)
+assert(string.find(tostring(err), "e1", 1, true) ~= nil)
+
+local ok2, err2 = xpcall(function()
+  error("e2")
+end, function(e)
+  return "handled-" .. tostring(e)
+end)
+assert(ok2 == false)
+assert(string.find(tostring(err2), "handled-", 1, true) ~= nil)
