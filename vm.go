@@ -699,8 +699,25 @@ func init() {
 			RA := lbase + A
 			B := int(inst & 0x1ff) //GETB
 			unaryv := L.rkValue(B)
-			if _, ok := unaryv.(LNumber); ok {
-				L.RaiseError("__unm undefined for uint256 numbers")
+			if lv, ok := unaryv.(LNumber); ok {
+				// Two's complement negation: -n = 0 - n (wraps mod 2^256).
+				// Consistent with EVM semantics: -1 == 2^256-1.
+				result := lNumberSub(LNumberZero, lv)
+				{
+					rg := reg
+					regi := RA
+					newSize := regi + 1
+					{
+						requiredSize := newSize
+						if requiredSize > cap(rg.array) {
+							rg.resize(requiredSize)
+						}
+					}
+					rg.array[regi] = result
+					if regi >= rg.top {
+						rg.top = regi + 1
+					}
+				}
 			} else {
 				op := L.metaOp1(unaryv, "__unm")
 				if op.Type() == LTFunction {
