@@ -147,6 +147,12 @@ func lNumberDiv(lhs, rhs LNumber) LNumber {
 	return LNumber(new(big.Int).Quo(lNumberToBigInt(lhs), lNumberToBigInt(rhs)).Text(10))
 }
 
+func lNumberFloorDiv(lhs, rhs LNumber) LNumber {
+	// For uint256 this is identical to truncating division.
+	// callers must check for zero divisor before calling
+	return LNumber(new(big.Int).Quo(lNumberToBigInt(lhs), lNumberToBigInt(rhs)).Text(10))
+}
+
 func lNumberMod(lhs, rhs LNumber) LNumber {
 	// callers must check for zero divisor before calling
 	return LNumber(new(big.Int).Mod(lNumberToBigInt(lhs), lNumberToBigInt(rhs)).Text(10))
@@ -154,4 +160,48 @@ func lNumberMod(lhs, rhs LNumber) LNumber {
 
 func lNumberPow(lhs, rhs LNumber) LNumber {
 	return LNumber(new(big.Int).Exp(lNumberToBigInt(lhs), lNumberToBigInt(rhs), uint256Mod).Text(10))
+}
+
+func lNumberBand(lhs, rhs LNumber) LNumber {
+	return wrapUint256(new(big.Int).And(lNumberToBigInt(lhs), lNumberToBigInt(rhs)))
+}
+
+func lNumberBor(lhs, rhs LNumber) LNumber {
+	return wrapUint256(new(big.Int).Or(lNumberToBigInt(lhs), lNumberToBigInt(rhs)))
+}
+
+func lNumberBxor(lhs, rhs LNumber) LNumber {
+	return wrapUint256(new(big.Int).Xor(lNumberToBigInt(lhs), lNumberToBigInt(rhs)))
+}
+
+func lNumberBnot(v LNumber) LNumber {
+	return wrapUint256(new(big.Int).Xor(lNumberToBigInt(v), uint256Max))
+}
+
+func lNumberShiftAmount(rhs LNumber) uint {
+	r := lNumberToBigInt(rhs)
+	if r.Sign() < 0 || !r.IsUint64() {
+		return 256
+	}
+	n := r.Uint64()
+	if n >= 256 {
+		return 256
+	}
+	return uint(n)
+}
+
+func lNumberShl(lhs, rhs LNumber) LNumber {
+	n := lNumberShiftAmount(rhs)
+	if n >= 256 {
+		return LNumberZero
+	}
+	return wrapUint256(new(big.Int).Lsh(lNumberToBigInt(lhs), n))
+}
+
+func lNumberShr(lhs, rhs LNumber) LNumber {
+	n := lNumberShiftAmount(rhs)
+	if n >= 256 {
+		return LNumberZero
+	}
+	return LNumber(new(big.Int).Rsh(lNumberToBigInt(lhs), n).Text(10))
 }

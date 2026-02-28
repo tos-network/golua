@@ -2,7 +2,7 @@
 package parse
 
 import (
-  "github.com/yuin/gopher-lua/ast"
+  "github.com/tos-network/gopher-lua/ast"
 )
 %}
 %type<stmts> chunk
@@ -13,6 +13,8 @@ import (
 %type<stmt>  laststat
 %type<funcname> funcname
 %type<funcname> funcname1
+%type<localnamelist> localnamelist
+%type<localname> localname
 %type<exprlist> varlist
 %type<expr> var
 %type<namelist> namelist
@@ -48,6 +50,8 @@ import (
   fieldsep  string
 
   namelist []string
+  localnamelist []ast.LocalName
+  localname ast.LocalName
   parlist  *ast.ParList
 }
 
@@ -55,15 +59,19 @@ import (
 %token<token> TAnd TBreak TDo TElse TElseIf TEnd TFalse TFor TFunction TIf TIn TLocal TNil TNot TOr TReturn TRepeat TThen TTrue TUntil TWhile TGoto
 
 /* Literals */
-%token<token> TEqeq TNeq TLte TGte T2Comma T3Comma T2Colon TIdent TNumber TString '{' '('
+%token<token> TEqeq TNeq TLte TGte T2Comma T3Comma T2Colon TShl TShr TFloorDiv TIdent TNumber TString '{' '('
 
 /* Operators */
 %left TOr
 %left TAnd
 %left '>' '<' TGte TLte TEqeq TNeq
+%left '|'
+%left '~'
+%left '&'
+%left TShl TShr
 %right T2Comma
 %left '+' '-'
-%left '*' '/' '%'
+%left '*' '/' TFloorDiv '%'
 %right UNARY /* not # -(unary) */
 %right '^'
 
@@ -180,12 +188,24 @@ stat:
             $$.SetLine($1.Pos.Line)
             $$.SetLastLine($4.LastLine())
         } | 
-        TLocal namelist '=' exprlist {
-            $$ = &ast.LocalAssignStmt{Names: $2, Exprs:$4}
+        TLocal localnamelist '=' exprlist {
+            names := make([]string, len($2))
+            attrs := make([]ast.LocalAttr, len($2))
+            for i, local := range $2 {
+                names[i] = local.Name
+                attrs[i] = local.Attr
+            }
+            $$ = &ast.LocalAssignStmt{Names: names, Attrs: attrs, Exprs:$4}
             $$.SetLine($1.Pos.Line)
         } |
-        TLocal namelist {
-            $$ = &ast.LocalAssignStmt{Names: $2, Exprs:[]ast.Expr{}}
+        TLocal localnamelist {
+            names := make([]string, len($2))
+            attrs := make([]ast.LocalAttr, len($2))
+            for i, local := range $2 {
+                names[i] = local.Name
+                attrs[i] = local.Attr
+            }
+            $$ = &ast.LocalAssignStmt{Names: names, Attrs: attrs, Exprs:[]ast.Expr{}}
             $$.SetLine($1.Pos.Line)
         } |
         T2Colon TIdent T2Colon {
@@ -273,6 +293,31 @@ namelist:
             $$ = append($1, $3.Str)
         }
 
+localnamelist:
+        localname {
+            $$ = []ast.LocalName{$1}
+        } |
+        localnamelist ',' localname {
+            $$ = append($1, $3)
+        }
+
+localname:
+        TIdent {
+            $$ = ast.LocalName{Name: $1.Str, Attr: ast.LocalAttrNone}
+        } |
+        TIdent '<' TIdent '>' {
+            attr := ast.LocalAttrNone
+            switch $3.Str {
+            case "const":
+                attr = ast.LocalAttrConst
+            case "close":
+                attr = ast.LocalAttrClose
+            default:
+                yylex.(*Lexer).TokenError($3, "unknown local attribute: "+$3.Str)
+            }
+            $$ = ast.LocalName{Name: $1.Str, Attr: attr}
+        }
+
 exprlist:
         expr {
             $$ = []ast.Expr{$1}
@@ -346,6 +391,26 @@ expr:
             $$ = &ast.RelationalOpExpr{Lhs: $1, Operator: "~=", Rhs: $3}
             $$.SetLine($1.Line())
         } |
+        expr '|' expr {
+            $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "|", Rhs: $3}
+            $$.SetLine($1.Line())
+        } |
+        expr '~' expr {
+            $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "~", Rhs: $3}
+            $$.SetLine($1.Line())
+        } |
+        expr '&' expr {
+            $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "&", Rhs: $3}
+            $$.SetLine($1.Line())
+        } |
+        expr TShl expr {
+            $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "<<", Rhs: $3}
+            $$.SetLine($1.Line())
+        } |
+        expr TShr expr {
+            $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: ">>", Rhs: $3}
+            $$.SetLine($1.Line())
+        } |
         expr T2Comma expr {
             $$ = &ast.StringConcatOpExpr{Lhs: $1, Rhs: $3}
             $$.SetLine($1.Line())
@@ -366,6 +431,10 @@ expr:
             $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "/", Rhs: $3}
             $$.SetLine($1.Line())
         } |
+        expr TFloorDiv expr {
+            $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "//", Rhs: $3}
+            $$.SetLine($1.Line())
+        } |
         expr '%' expr {
             $$ = &ast.ArithmeticOpExpr{Lhs: $1, Operator: "%", Rhs: $3}
             $$.SetLine($1.Line())
@@ -380,6 +449,10 @@ expr:
         } |
         TNot expr %prec UNARY {
             $$ = &ast.UnaryNotOpExpr{Expr: $2}
+            $$.SetLine($2.Line())
+        } |
+        '~' expr %prec UNARY {
+            $$ = &ast.UnaryBitNotOpExpr{Expr: $2}
             $$.SetLine($2.Line())
         } |
         '#' expr %prec UNARY {
@@ -532,4 +605,3 @@ func TokenName(c int) string {
 	}
     return string([]byte{byte(c)})
 }
-

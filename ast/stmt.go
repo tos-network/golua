@@ -22,6 +22,7 @@ type LocalAssignStmt struct {
 	StmtBase
 
 	Names []string
+	Attrs []LocalAttr
 	Exprs []Expr
 }
 

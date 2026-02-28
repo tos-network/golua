@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tos-network/gopher-lua/ast"
 )
@@ -246,6 +247,47 @@ func (sc *Scanner) scanEscape(ch int, buf *bytes.Buffer) error {
 		}
 		val, _ := strconv.ParseInt(string(hexBuf[:]), 16, 32)
 		writeChar(buf, int(val))
+	case 'z':
+		// Lua 5.4: \z skips all following whitespace (including newlines).
+		for {
+			nc := sc.Peek()
+			if nc < 0 {
+				return nil
+			}
+			switch nc {
+			case ' ', '\t', '\n', '\r', '\v', '\f':
+				sc.Next()
+			default:
+				return nil
+			}
+		}
+	case 'u':
+		// Lua 5.4: \u{XXX}
+		if sc.Next() != '{' {
+			return sc.Error(`\u`, `\u escape requires '{'`)
+		}
+		var hexBuf bytes.Buffer
+		for {
+			nc := sc.Next()
+			if nc < 0 {
+				return sc.Error(`\u{`, `unterminated \u{...} escape`)
+			}
+			if nc == '}' {
+				break
+			}
+			if !isHex(nc) {
+				return sc.Error(string(rune(nc)), `\u escape has invalid hex digit`)
+			}
+			writeChar(&hexBuf, nc)
+		}
+		if hexBuf.Len() == 0 {
+			return sc.Error(`\u{}`, `\u escape requires at least one hex digit`)
+		}
+		codepoint, err := strconv.ParseInt(hexBuf.String(), 16, 32)
+		if err != nil || codepoint > utf8.MaxRune || (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
+			return sc.Error(hexBuf.String(), `invalid Unicode codepoint in \u escape`)
+		}
+		buf.WriteRune(rune(codepoint))
 	default:
 		if '0' <= ch && ch <= '9' {
 			bytes := []byte{byte(ch)}
@@ -386,12 +428,17 @@ redo:
 				tok.Str = "~="
 				sc.Next()
 			} else {
-				err = sc.Error("~", "Invalid '~' token")
+				tok.Type = '~'
+				tok.Str = "~"
 			}
 		case '<':
 			if sc.Peek() == '=' {
 				tok.Type = TLte
 				tok.Str = "<="
+				sc.Next()
+			} else if sc.Peek() == '<' {
+				tok.Type = TShl
+				tok.Str = "<<"
 				sc.Next()
 			} else {
 				tok.Type = ch
@@ -401,6 +448,19 @@ redo:
 			if sc.Peek() == '=' {
 				tok.Type = TGte
 				tok.Str = ">="
+				sc.Next()
+			} else if sc.Peek() == '>' {
+				tok.Type = TShr
+				tok.Str = ">>"
+				sc.Next()
+			} else {
+				tok.Type = ch
+				tok.Str = string(rune(ch))
+			}
+		case '/':
+			if sc.Peek() == '/' {
+				tok.Type = TFloorDiv
+				tok.Str = "//"
 				sc.Next()
 			} else {
 				tok.Type = ch
@@ -435,7 +495,7 @@ redo:
 				tok.Type = ch
 				tok.Str = string(rune(ch))
 			}
-		case '+', '*', '/', '%', '^', '#', '(', ')', '{', '}', ']', ';', ',':
+		case '+', '*', '%', '^', '#', '(', ')', '{', '}', ']', ';', ',', '&', '|':
 			tok.Type = ch
 			tok.Str = string(rune(ch))
 		default:

@@ -95,6 +95,14 @@ const (
 
 	OP_VARARG /*     A B     R(A) R(A+1) ... R(A+B-1) = vararg            */
 
+	OP_BAND /*      A B C   R(A) := RK(B) & RK(C)                           */
+	OP_BOR  /*      A B C   R(A) := RK(B) | RK(C)                           */
+	OP_BXOR /*      A B C   R(A) := RK(B) ~ RK(C)                           */
+	OP_SHL  /*      A B C   R(A) := RK(B) << RK(C)                          */
+	OP_SHR  /*      A B C   R(A) := RK(B) >> RK(C)                          */
+	OP_IDIV /*      A B C   R(A) := RK(B) // RK(C)                          */
+	OP_BNOT /*      A B     R(A) := ~R(B)                                   */
+
 	OP_NOP /* NOP */
 )
 const opCodeMax = OP_NOP
@@ -167,6 +175,13 @@ var opProps = []opProp{
 	opProp{"CLOSE", false, false, opArgModeN, opArgModeN, opTypeABC},
 	opProp{"CLOSURE", false, true, opArgModeU, opArgModeN, opTypeABx},
 	opProp{"VARARG", false, true, opArgModeU, opArgModeN, opTypeABC},
+	opProp{"BAND", false, true, opArgModeK, opArgModeK, opTypeABC},
+	opProp{"BOR", false, true, opArgModeK, opArgModeK, opTypeABC},
+	opProp{"BXOR", false, true, opArgModeK, opArgModeK, opTypeABC},
+	opProp{"SHL", false, true, opArgModeK, opArgModeK, opTypeABC},
+	opProp{"SHR", false, true, opArgModeK, opArgModeK, opTypeABC},
+	opProp{"IDIV", false, true, opArgModeK, opArgModeK, opTypeABC},
+	opProp{"BNOT", false, true, opArgModeR, opArgModeN, opTypeABC},
 	opProp{"NOP", false, false, opArgModeR, opArgModeN, opTypeASbx},
 }
 
@@ -364,6 +379,20 @@ func opToString(inst uint32) string {
 		buf += fmt.Sprintf("; R(%v) := closure(KPROTO[%v] R(%v) ... R(%v+n))", arga, argbx, arga, arga)
 	case OP_VARARG:
 		buf += fmt.Sprintf(";  R(%v) R(%v+1) ... R(%v+%v-1) = vararg", arga, arga, arga, argb)
+	case OP_BAND:
+		buf += fmt.Sprintf("; R(%v) := RK(%v) & RK(%v)", arga, argb, argc)
+	case OP_BOR:
+		buf += fmt.Sprintf("; R(%v) := RK(%v) | RK(%v)", arga, argb, argc)
+	case OP_BXOR:
+		buf += fmt.Sprintf("; R(%v) := RK(%v) ~ RK(%v)", arga, argb, argc)
+	case OP_SHL:
+		buf += fmt.Sprintf("; R(%v) := RK(%v) << RK(%v)", arga, argb, argc)
+	case OP_SHR:
+		buf += fmt.Sprintf("; R(%v) := RK(%v) >> RK(%v)", arga, argb, argc)
+	case OP_IDIV:
+		buf += fmt.Sprintf("; R(%v) := RK(%v) // RK(%v)", arga, argb, argc)
+	case OP_BNOT:
+		buf += fmt.Sprintf("; R(%v) := ~R(%v)", arga, argb)
 	case OP_NOP:
 		/* nothing to do */
 	}

@@ -6,6 +6,7 @@ package lua
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -1881,6 +1882,7 @@ func init() {
 			lbase := cf.LocalBase
 			A := int(inst>>18) & 0xff //GETA
 			RA := lbase + A
+			closeToBeClosedVars(L, cf, A)
 			// this section is inlined by go-inline
 			// source function is 'func (ls *LState) closeUpvalues(idx int) ' in '_state.go'
 			{
@@ -2003,13 +2005,143 @@ func init() {
 			}
 			return 0
 		},
+		opArith, // OP_BAND
+		opArith, // OP_BOR
+		opArith, // OP_BXOR
+		opArith, // OP_SHL
+		opArith, // OP_SHR
+		opArith, // OP_IDIV
+		func(L *LState, inst uint32, baseframe *callFrame) int { //OP_BNOT
+			reg := L.reg
+			cf := L.currentFrame
+			lbase := cf.LocalBase
+			A := int(inst>>18) & 0xff //GETA
+			RA := lbase + A
+			B := int(inst & 0x1ff) //GETB
+			unaryv := L.rkValue(B)
+			if lv, ok := unaryv.(LNumber); ok {
+				result := lNumberBnot(lv)
+				{
+					rg := reg
+					regi := RA
+					newSize := regi + 1
+					{
+						requiredSize := newSize
+						if requiredSize > cap(rg.array) {
+							rg.resize(requiredSize)
+						}
+					}
+					rg.array[regi] = result
+					if regi >= rg.top {
+						rg.top = regi + 1
+					}
+				}
+			} else {
+				if str, ok := unaryv.(LString); ok {
+					if parsed, err := parseNumber(string(str)); err == nil {
+						result := lNumberBnot(parsed)
+						{
+							rg := reg
+							regi := RA
+							newSize := regi + 1
+							{
+								requiredSize := newSize
+								if requiredSize > cap(rg.array) {
+									rg.resize(requiredSize)
+								}
+							}
+							rg.array[regi] = result
+							if regi >= rg.top {
+								rg.top = regi + 1
+							}
+						}
+						return 0
+					}
+				}
+				op := L.metaOp1(unaryv, "__bnot")
+				if op.Type() == LTFunction {
+					reg.Push(op)
+					reg.Push(unaryv)
+					L.Call(1, 1)
+					{
+						rg := reg
+						regi := RA
+						vali := reg.Pop()
+						newSize := regi + 1
+						{
+							requiredSize := newSize
+							if requiredSize > cap(rg.array) {
+								rg.resize(requiredSize)
+							}
+						}
+						rg.array[regi] = vali
+						if regi >= rg.top {
+							rg.top = regi + 1
+						}
+					}
+				} else {
+					L.RaiseError("__bnot undefined")
+				}
+			}
+			return 0
+		},
 		func(L *LState, inst uint32, baseframe *callFrame) int { //OP_NOP
 			return 0
 		},
 	}
 }
 
-func opArith(L *LState, inst uint32, baseframe *callFrame) int { //OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW
+func closeToBeClosedVars(L *LState, cf *callFrame, minReg int) {
+	if cf == nil || cf.Fn == nil || cf.Fn.Proto == nil || len(cf.Fn.Proto.DbgLocals) == 0 {
+		return
+	}
+	pc := cf.Pc - 1
+
+	type closeCandidate struct {
+		name string
+		reg  int
+	}
+	candidates := make([]closeCandidate, 0, 4)
+	for _, li := range cf.Fn.Proto.DbgLocals {
+		if li.Attr != dbgLocalAttrClose {
+			continue
+		}
+		if li.Reg < minReg {
+			continue
+		}
+		if li.StartPc <= pc && pc <= li.EndPc {
+			candidates = append(candidates, closeCandidate{name: li.Name, reg: li.Reg})
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	// Lua closes variables in reverse declaration order.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].reg > candidates[j].reg
+	})
+	for _, c := range candidates {
+		idx := cf.LocalBase + c.reg
+		v := L.reg.Get(idx)
+		if v == LNil || v == LFalse {
+			continue
+		}
+		op := L.metaOp1(v, "__close")
+		fn, ok := op.(*LFunction)
+		if !ok {
+			L.RaiseError("variable '%s' has no __close metamethod", c.name)
+			return
+		}
+		L.reg.Push(fn)
+		L.reg.Push(v)
+		L.reg.Push(LNil) // no error object during normal close
+		L.Call(2, 0)
+		// Mark as closed to avoid duplicate invocation from later OP_CLOSE.
+		L.reg.Set(idx, LNil)
+	}
+}
+
+func opArith(L *LState, inst uint32, baseframe *callFrame) int { // arithmetic/bitwise binary ops
 	reg := L.reg
 	cf := L.currentFrame
 	lbase := cf.LocalBase
@@ -2087,6 +2219,11 @@ func numberArith(L *LState, opcode int, lhs, rhs LNumber) LNumber {
 			L.RaiseError("attempt to perform 'n/0'")
 		}
 		return lNumberDiv(lhs, rhs)
+	case OP_IDIV:
+		if lNumberIsZero(rhs) {
+			L.RaiseError("attempt to perform 'n//0'")
+		}
+		return lNumberFloorDiv(lhs, rhs)
 	case OP_MOD:
 		if lNumberIsZero(rhs) {
 			L.RaiseError("attempt to perform 'n%%0'")
@@ -2094,6 +2231,16 @@ func numberArith(L *LState, opcode int, lhs, rhs LNumber) LNumber {
 		return lNumberMod(lhs, rhs)
 	case OP_POW:
 		return lNumberPow(lhs, rhs)
+	case OP_BAND:
+		return lNumberBand(lhs, rhs)
+	case OP_BOR:
+		return lNumberBor(lhs, rhs)
+	case OP_BXOR:
+		return lNumberBxor(lhs, rhs)
+	case OP_SHL:
+		return lNumberShl(lhs, rhs)
+	case OP_SHR:
+		return lNumberShr(lhs, rhs)
 	default:
 		panic("should not reach here")
 	}
@@ -2115,6 +2262,18 @@ func objectArith(L *LState, opcode int, lhs, rhs LValue) LValue {
 		event = "__mod"
 	case OP_POW:
 		event = "__pow"
+	case OP_BAND:
+		event = "__band"
+	case OP_BOR:
+		event = "__bor"
+	case OP_BXOR:
+		event = "__bxor"
+	case OP_SHL:
+		event = "__shl"
+	case OP_SHR:
+		event = "__shr"
+	case OP_IDIV:
+		event = "__idiv"
 	}
 	op := L.metaOp2(lhs, rhs, event)
 	if _, ok := op.(*LFunction); ok {

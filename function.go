@@ -11,8 +11,16 @@ const (
 	VarArgNeedsArg uint8 = 4
 )
 
+const (
+	dbgLocalAttrNone uint8 = iota
+	dbgLocalAttrConst
+	dbgLocalAttrClose
+)
+
 type DbgLocalInfo struct {
 	Name    string
+	Reg     int
+	Attr    uint8
 	StartPc int
 	EndPc   int
 }

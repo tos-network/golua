@@ -641,13 +641,13 @@ func TestHexEscape(t *testing.T) {
 		expr string // a Lua string expression (not a statement)
 		want string
 	}{
-		{`"\x00"`, "\x00"},             // null byte
-		{`"\xff"`, "\xff"},             // 0xff
+		{`"\x00"`, "\x00"},                         // null byte
+		{`"\xff"`, "\xff"},                         // 0xff
 		{`"\xde\xad\xbe\xef"`, "\xde\xad\xbe\xef"}, // multi-byte
-		{`"\x41\x42\x43"`, "ABC"},      // ASCII via hex
-		{`"\x0a"`, "\n"},               // \x0a == newline
-		{`"a\x20b"`, "a b"},           // hex in middle of string
-		{`"\xDE\xAD"`, "\xde\xad"},    // uppercase hex digits
+		{`"\x41\x42\x43"`, "ABC"},                  // ASCII via hex
+		{`"\x0a"`, "\n"},                           // \x0a == newline
+		{`"a\x20b"`, "a b"},                        // hex in middle of string
+		{`"\xDE\xAD"`, "\xde\xad"},                 // uppercase hex digits
 	}
 
 	for _, tc := range cases {
@@ -673,5 +673,162 @@ func TestHexEscape(t *testing.T) {
 	// \x with only one hex digit must also error.
 	if err := L.DoString(`local s = "\x4"`); err == nil {
 		t.Error(`"\x4" (one digit) should produce a lexer error but did not`)
+	}
+}
+
+func TestUnicodeEscape(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	cases := []struct {
+		expr string
+		want string
+	}{
+		{`"\u{41}"`, "A"},
+		{`"\u{03A9}"`, "Ω"},
+		{`"\u{1F600}"`, "😀"},
+	}
+
+	for _, tc := range cases {
+		if err := L.DoString(`_result = ` + tc.expr); err != nil {
+			t.Fatalf("expr %q: unexpected error: %v", tc.expr, err)
+		}
+		got, ok := L.GetGlobal("_result").(LString)
+		if !ok {
+			t.Fatalf("expr %q: result is not LString", tc.expr)
+		}
+		if string(got) != tc.want {
+			t.Fatalf("expr %q: want %q, got %q", tc.expr, tc.want, string(got))
+		}
+	}
+
+	invalid := []string{
+		`local s = "\u{}"`,
+		`local s = "\u{110000}"`,
+		`local s = "\u{D800}"`,
+	}
+	for _, src := range invalid {
+		if err := L.DoString(src); err == nil {
+			t.Fatalf("expected Unicode escape error for %q", src)
+		}
+	}
+}
+
+func TestZEscape(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	if err := L.DoString("_result = \"a\\z \t  b\""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, ok := L.GetGlobal("_result").(LString)
+	if !ok {
+		t.Fatal("result is not LString")
+	}
+	if string(got) != "ab" {
+		t.Fatalf("want %q, got %q", "ab", string(got))
+	}
+
+	src := "_result = \"a\\z\n  b\""
+	if err := L.DoString(src); err != nil {
+		t.Fatalf("unexpected multiline \\z error: %v", err)
+	}
+	got, ok = L.GetGlobal("_result").(LString)
+	if !ok {
+		t.Fatal("result is not LString")
+	}
+	if string(got) != "ab" {
+		t.Fatalf("want %q, got %q", "ab", string(got))
+	}
+}
+
+func TestLua54BitwiseAndIDiv(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	src := `
+		assert(7 // 2 == 3)
+		assert((5 & 3) == 1)
+		assert((5 | 2) == 7)
+		assert((5 ~ 1) == 4)
+		assert((1 << 8) == 256)
+		assert((256 >> 8) == 1)
+		assert((1 << 256) == 0)
+		assert((~(~123)) == 123)
+	`
+	if err := L.DoString(src); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLocalAttributes(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	// <const>: assignments after declaration must fail at compile time.
+	if err := L.DoString(`
+		local x<const> = 1
+		x = 2
+	`); err == nil {
+		t.Fatal("expected const local assignment compile error")
+	}
+
+	// <close>: invoke __close exactly once when scope exits.
+	if err := L.DoString(`
+		closed = 0
+		do
+			local h<close> = setmetatable({}, {
+				__close = function(self, err)
+					assert(err == nil)
+					closed = closed + 1
+				end
+			})
+		end
+		assert(closed == 1)
+	`); err != nil {
+		t.Fatalf("unexpected <close> error: %v", err)
+	}
+
+	// LIFO order for multiple to-be-closed locals in same scope.
+	if err := L.DoString(`
+		seq = ""
+		do
+			local a<close> = setmetatable({}, { __close = function() seq = seq .. "a" end })
+			local b<close> = setmetatable({}, { __close = function() seq = seq .. "b" end })
+		end
+		assert(seq == "ba")
+	`); err != nil {
+		t.Fatalf("unexpected LIFO close error: %v", err)
+	}
+
+	// break should also trigger __close.
+	if err := L.DoString(`
+		closed = 0
+		while true do
+			local h <close> = setmetatable({}, { __close = function() closed = closed + 1 end })
+			break
+		end
+		assert(closed == 1)
+	`); err != nil {
+		t.Fatalf("unexpected break close error: %v", err)
+	}
+
+	if err := L.DoString(`local x <foo> = 1`); err == nil {
+		t.Fatal("expected unknown local attribute error")
+	}
+}
+
+func TestNumberLiteralPolicyStillUint256(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	if err := L.DoString(`local x = 0xff; assert(x == 255)`); err != nil {
+		t.Fatalf("hex integer should be accepted: %v", err)
+	}
+	if err := L.DoString(`local x = 1.5`); err == nil {
+		t.Fatal("float literal should be rejected")
+	}
+	if err := L.DoString(`local x = 1e5`); err == nil {
+		t.Fatal("scientific literal should be rejected")
 	}
 }

@@ -299,15 +299,21 @@ func (cd *codeStore) Pop() {
 type varNamePoolValue struct {
 	Index int
 	Name  string
+	Attr  ast.LocalAttr
 }
 
 type varNamePool struct {
 	names  []string
+	attrs  []ast.LocalAttr
 	offset int
 }
 
 func newVarNamePool(offset int) *varNamePool {
-	return &varNamePool{make([]string, 0, 16), offset}
+	return &varNamePool{
+		names:  make([]string, 0, 16),
+		attrs:  make([]ast.LocalAttr, 0, 16),
+		offset: offset,
+	}
 }
 
 func (vp *varNamePool) Names() []string {
@@ -319,6 +325,7 @@ func (vp *varNamePool) List() []varNamePoolValue {
 	for i, name := range vp.names {
 		result[i].Index = i + vp.offset
 		result[i].Name = name
+		result[i].Attr = vp.attrs[i]
 	}
 	return result
 }
@@ -345,8 +352,21 @@ func (vp *varNamePool) RegisterUnique(name string) int {
 }
 
 func (vp *varNamePool) Register(name string) int {
+	return vp.RegisterWithAttr(name, ast.LocalAttrNone)
+}
+
+func (vp *varNamePool) RegisterWithAttr(name string, attr ast.LocalAttr) int {
 	vp.names = append(vp.names, name)
+	vp.attrs = append(vp.attrs, attr)
 	return len(vp.names) - 1 + vp.offset
+}
+
+func (vp *varNamePool) Attr(index int) ast.LocalAttr {
+	i := index - vp.offset
+	if i < 0 || i >= len(vp.attrs) {
+		return ast.LocalAttrNone
+	}
+	return vp.attrs[i]
 }
 
 /* }}} VarNamePool */
@@ -394,6 +414,15 @@ func (b *codeBlock) LocalVarsCount() int {
 		count += len(block.LocalVars.Names())
 	}
 	return count
+}
+
+func (b *codeBlock) HasToBeClosed() bool {
+	for _, v := range b.LocalVars.List() {
+		if v.Attr == ast.LocalAttrClose {
+			return true
+		}
+	}
+	return false
 }
 
 type funcContext struct {
@@ -465,7 +494,7 @@ func (fc *funcContext) ResolveGoto(from, to *gotoLabelDesc, index int) {
 func (fc *funcContext) FindLabel(block *codeBlock, gotoLabel *gotoLabelDesc, i int) bool {
 	target := block.GetLabel(gotoLabel.Name)
 	if target != nil {
-		if gotoLabel.NumActiveLocalVars > target.NumActiveLocalVars && block.RefUpvalue {
+		if gotoLabel.NumActiveLocalVars > target.NumActiveLocalVars && (block.RefUpvalue || block.HasToBeClosed()) {
 			fc.Code.SetA(gotoLabel.Pc-1, target.NumActiveLocalVars)
 		}
 		fc.ResolveGoto(gotoLabel, target, i)
@@ -482,7 +511,7 @@ func (fc *funcContext) ResolveCurrentBlockGotosWithParentBlock() {
 			continue
 		}
 		if gotoLabel.NumActiveLocalVars > blockActiveLocalVars {
-			if fc.Block.RefUpvalue {
+			if fc.Block.RefUpvalue || fc.Block.HasToBeClosed() {
 				fc.Code.SetA(gotoLabel.Pc-1, blockActiveLocalVars)
 			}
 			gotoLabel.SetNumActiveLocalVars(blockActiveLocalVars)
@@ -540,8 +569,17 @@ func (fc *funcContext) BlockLocalVarsCount() int {
 }
 
 func (fc *funcContext) RegisterLocalVar(name string) int {
-	ret := fc.Block.LocalVars.Register(name)
-	fc.Proto.DbgLocals = append(fc.Proto.DbgLocals, &DbgLocalInfo{Name: name, StartPc: fc.Code.LastPC() + 1})
+	return fc.RegisterLocalVarWithAttr(name, ast.LocalAttrNone)
+}
+
+func (fc *funcContext) RegisterLocalVarWithAttr(name string, attr ast.LocalAttr) int {
+	ret := fc.Block.LocalVars.RegisterWithAttr(name, attr)
+	fc.Proto.DbgLocals = append(fc.Proto.DbgLocals, &DbgLocalInfo{
+		Name:    name,
+		Reg:     ret,
+		Attr:    uint8(attr),
+		StartPc: fc.Code.LastPC() + 1,
+	})
 	fc.SetRegTop(fc.RegTop() + 1)
 	return ret
 }
@@ -575,7 +613,7 @@ func (fc *funcContext) EnterBlock(blabel int, pos ast.PositionHolder) {
 
 func (fc *funcContext) CloseUpvalues() int {
 	n := -1
-	if fc.Block.RefUpvalue {
+	if fc.Block.RefUpvalue || fc.Block.HasToBeClosed() {
 		n = fc.Block.Parent.LocalVars.LastIndex()
 		fc.Code.AddABC(OP_CLOSE, n, 0, 0, fc.Block.LastLine)
 	}
@@ -596,7 +634,13 @@ func (fc *funcContext) LeaveBlock() int {
 
 func (fc *funcContext) EndScope() {
 	for _, vr := range fc.Block.LocalVars.List() {
-		fc.Proto.DbgLocals[vr.Index].EndPc = fc.Code.LastPC()
+		for i := len(fc.Proto.DbgLocals) - 1; i >= 0; i-- {
+			li := fc.Proto.DbgLocals[i]
+			if li.Reg == vr.Index && li.EndPc == 0 {
+				li.EndPc = fc.Code.LastPC()
+				break
+			}
+		}
 	}
 }
 
@@ -698,7 +742,14 @@ func compileAssignStmtLeft(context *funcContext, stmt *ast.AssignStmt) (int, []*
 			case ecUpvalue:
 				context.Upvalues.RegisterUnique(st.Value)
 			case ecLocal:
-				ec.reg = context.FindLocalVar(st.Value)
+				localReg, localBlock := context.FindLocalVarAndBlock(st.Value)
+				if localReg < 0 || localBlock == nil {
+					panic("unreachable: local identifier not found")
+				}
+				if localBlock.LocalVars.Attr(localReg) == ast.LocalAttrConst {
+					raiseCompileError(context, sline(st), "attempt to assign to const local '%s'", st.Value)
+				}
+				ec.reg = localReg
 			}
 			acs = append(acs, &assigncontext{ec, 0, 0, false, false})
 		case *ast.AttrGetExpr:
@@ -852,18 +903,22 @@ func compileRegAssignment(context *funcContext, names []string, exprs []ast.Expr
 } // }}}
 
 func compileLocalAssignStmt(context *funcContext, stmt *ast.LocalAssignStmt) { // {{{
+	attrs := stmt.Attrs
+	if len(attrs) != len(stmt.Names) {
+		attrs = make([]ast.LocalAttr, len(stmt.Names))
+	}
 	reg := context.RegTop()
 	if len(stmt.Names) == 1 && len(stmt.Exprs) == 1 {
 		if _, ok := stmt.Exprs[0].(*ast.FunctionExpr); ok {
-			context.RegisterLocalVar(stmt.Names[0])
+			context.RegisterLocalVarWithAttr(stmt.Names[0], attrs[0])
 			compileRegAssignment(context, stmt.Names, stmt.Exprs, reg, len(stmt.Names), sline(stmt))
 			return
 		}
 	}
 
 	compileRegAssignment(context, stmt.Names, stmt.Exprs, reg, len(stmt.Names), sline(stmt))
-	for _, name := range stmt.Names {
-		context.RegisterLocalVar(name)
+	for i, name := range stmt.Names {
+		context.RegisterLocalVarWithAttr(name, attrs[i])
 	}
 } // }}}
 
@@ -1019,7 +1074,7 @@ func compileRepeatStmt(context *funcContext, stmt *ast.RepeatStmt) { // {{{
 func compileBreakStmt(context *funcContext, stmt *ast.BreakStmt) { // {{{
 	for block := context.Block; block != nil; block = block.Parent {
 		if label := block.BreakLabel; label != labelNoJump {
-			if block.RefUpvalue {
+			if block.RefUpvalue || block.HasToBeClosed() {
 				context.Code.AddABC(OP_CLOSE, block.Parent.LocalVars.LastIndex(), 0, 0, sline(stmt))
 			}
 			context.Code.AddASbx(OP_JMP, 0, label, sline(stmt))
@@ -1210,7 +1265,7 @@ func compileExpr(context *funcContext, reg int, expr ast.Expr, ec *expcontext) i
 	case *ast.StringConcatOpExpr:
 		compileStringConcatOpExpr(context, reg, ex, ec)
 		return sused
-	case *ast.UnaryMinusOpExpr, *ast.UnaryNotOpExpr, *ast.UnaryLenOpExpr:
+	case *ast.UnaryMinusOpExpr, *ast.UnaryNotOpExpr, *ast.UnaryLenOpExpr, *ast.UnaryBitNotOpExpr:
 		compileUnaryOpExpr(context, reg, ex, ec)
 		return sused
 	case *ast.RelationalOpExpr:
@@ -1288,8 +1343,23 @@ func constFold(exp ast.Expr) ast.Expr { // {{{
 					return expr // division by zero: skip folding, let runtime raise error
 				}
 				return &constLValueExpr{Value: lNumberMod(lvalue, rvalue)}
+			case "//":
+				if lNumberIsZero(rvalue) {
+					return expr // division by zero: skip folding, let runtime raise error
+				}
+				return &constLValueExpr{Value: lNumberFloorDiv(lvalue, rvalue)}
 			case "^":
 				return &constLValueExpr{Value: lNumberPow(lvalue, rvalue)}
+			case "&":
+				return &constLValueExpr{Value: lNumberBand(lvalue, rvalue)}
+			case "|":
+				return &constLValueExpr{Value: lNumberBor(lvalue, rvalue)}
+			case "~":
+				return &constLValueExpr{Value: lNumberBxor(lvalue, rvalue)}
+			case "<<":
+				return &constLValueExpr{Value: lNumberShl(lvalue, rvalue)}
+			case ">>":
+				return &constLValueExpr{Value: lNumberShr(lvalue, rvalue)}
 			default:
 				panic(fmt.Sprintf("unknown binop: %v", expr.Operator))
 			}
@@ -1298,6 +1368,12 @@ func constFold(exp ast.Expr) ast.Expr { // {{{
 		}
 	case *ast.UnaryMinusOpExpr:
 		expr.Expr = constFold(expr.Expr)
+		return expr
+	case *ast.UnaryBitNotOpExpr:
+		expr.Expr = constFold(expr.Expr)
+		if v, ok := lnumberValue(expr.Expr); ok {
+			return &constLValueExpr{Value: lNumberBnot(v)}
+		}
 		return expr
 	default:
 
@@ -1443,10 +1519,22 @@ func compileArithmeticOpExpr(context *funcContext, reg int, expr *ast.Arithmetic
 		op = OP_MUL
 	case "/":
 		op = OP_DIV
+	case "//":
+		op = OP_IDIV
 	case "%":
 		op = OP_MOD
 	case "^":
 		op = OP_POW
+	case "&":
+		op = OP_BAND
+	case "|":
+		op = OP_BOR
+	case "~":
+		op = OP_BXOR
+	case "<<":
+		op = OP_SHL
+	case ">>":
+		op = OP_SHR
 	}
 	context.Code.AddABC(op, a, b, c, sline(expr))
 } // }}}
@@ -1501,6 +1589,16 @@ func compileUnaryOpExpr(context *funcContext, reg int, expr ast.Expr, ec *expcon
 		}
 	case *ast.UnaryLenOpExpr:
 		opcode = OP_LEN
+		operandexpr = ex.Expr
+	case *ast.UnaryBitNotOpExpr:
+		exp := constFold(ex)
+		if lvexpr, ok := exp.(*constLValueExpr); ok {
+			exp.SetLine(sline(expr))
+			compileExpr(context, reg, lvexpr, ec)
+			return
+		}
+		ex, _ = exp.(*ast.UnaryBitNotOpExpr)
+		opcode = OP_BNOT
 		operandexpr = ex.Expr
 	}
 
