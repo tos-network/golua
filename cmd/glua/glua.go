@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"github.com/chzyer/readline"
-	"github.com/tos-network/golua"
-	"github.com/tos-network/golua/parse"
+	"github.com/tos-network/glua"
+	"github.com/tos-network/glua/parse"
 	"os"
 	"runtime/pprof"
 )

@@ -1,4 +1,4 @@
-module github.com/tos-network/golua
+module github.com/tos-network/glua
 
 go 1.17
 

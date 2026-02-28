@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	lua "github.com/tos-network/golua"
-	"github.com/tos-network/golua/parse"
+	lua "github.com/tos-network/glua"
+	"github.com/tos-network/glua/parse"
 )
 
 func stripShebang(src []byte) []byte {

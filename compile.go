@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/tos-network/golua/ast"
+	"github.com/tos-network/glua/ast"
 )
 
 /* internal constants & structs  {{{ */

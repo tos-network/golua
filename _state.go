@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tos-network/golua/parse"
+	"github.com/tos-network/glua/parse"
 )
 
 const MultRet = -1
