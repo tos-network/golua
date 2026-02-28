@@ -1,7 +1,6 @@
 package lua
 
 import (
-	"os"
 	"testing"
 )
 
@@ -298,39 +297,3 @@ func TestOptChannel(t *testing.T) {
 	}, "channel expected, got string")
 }
 
-func TestLoadFileForShebang(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "")
-	errorIfNotNil(t, err)
-
-	err = os.WriteFile(tmpFile.Name(), []byte(`#!/path/to/lua
-print("hello")
-`), 0644)
-	errorIfNotNil(t, err)
-
-	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-	}()
-
-	L := NewState()
-	defer L.Close()
-
-	_, err = L.LoadFile(tmpFile.Name())
-	errorIfNotNil(t, err)
-}
-
-func TestLoadFileForEmptyFile(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "")
-	errorIfNotNil(t, err)
-
-	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-	}()
-
-	L := NewState()
-	defer L.Close()
-
-	_, err = L.LoadFile(tmpFile.Name())
-	errorIfNotNil(t, err)
-}

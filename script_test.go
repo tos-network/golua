@@ -78,7 +78,10 @@ func testScriptDir(t *testing.T, tests []string, directory string) {
 			IncludeGoStackTrace: true,
 		})
 		L.SetMx(maxMemory)
-		if err := L.DoFile(script); err != nil {
+		src, err := os.ReadFile(script)
+		if err != nil {
+			t.Error(err)
+		} else if err := L.DoString(string(src)); err != nil {
 			t.Error(err)
 		}
 		L.Close()

@@ -65,7 +65,10 @@ Available options are:
 	}
 
 	if len(opt_l) > 0 {
-		if err := L.DoFile(opt_l); err != nil {
+		src, err := os.ReadFile(opt_l)
+		if err != nil {
+			fmt.Println(err.Error())
+		} else if err := L.DoString(string(src)); err != nil {
 			fmt.Println(err.Error())
 		}
 	}
@@ -100,7 +103,11 @@ Available options are:
 				fmt.Println(proto.String())
 			}
 		}
-		if err := L.DoFile(script); err != nil {
+		src, err := os.ReadFile(script)
+		if err != nil {
+			fmt.Println(err.Error())
+			status = 1
+		} else if err := L.DoString(string(src)); err != nil {
 			fmt.Println(err.Error())
 			status = 1
 		}
