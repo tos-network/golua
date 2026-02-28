@@ -12,6 +12,7 @@ func OpenBase(L *LState) int {
 	L.SetGlobal("_VERSION", LString(LuaVersion))
 	L.SetGlobal("_GOPHER_LUA_VERSION", LString(PackageName+" "+PackageVersion))
 	basemod := L.RegisterModule("_G", baseFuncs)
+	openMapping(L)
 	global.RawSetString("ipairs", L.NewClosure(baseIpairs, L.NewFunction(ipairsaux)))
 	global.RawSetString("pairs", L.NewClosure(basePairs, L.NewFunction(pairsaux)))
 	L.Push(basemod)
@@ -19,7 +20,8 @@ func OpenBase(L *LState) int {
 }
 
 var baseFuncs = map[string]LGFunction{
-	"assert": baseAssert,
+	"address": baseAddress,
+	"assert":  baseAssert,
 	// collectgarbage REMOVED: runtime GC behavior is not consensus-critical
 	// and can leak host runtime nondeterminism into contracts.
 	"error": baseError,
@@ -242,6 +244,15 @@ func baseToNumber(L *LState) int {
 	default:
 		L.Push(LNil)
 	}
+	return 1
+}
+
+func baseAddress(L *LState) int {
+	addr, err := parseAddressValue(L.CheckAny(1))
+	if err != nil {
+		L.ArgError(1, err.Error())
+	}
+	L.Push(addr)
 	return 1
 }
 

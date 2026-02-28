@@ -12,12 +12,13 @@ const (
 	LTBool
 	LTNumber
 	LTString
+	LTAddress
 	LTFunction
 	LTUserData
 	LTTable
 )
 
-var lValueNames = [7]string{"nil", "boolean", "number", "string", "function", "userdata", "table"}
+var lValueNames = [8]string{"nil", "boolean", "number", "string", "address", "function", "userdata", "table"}
 
 func (vt LValueType) String() string {
 	return lValueNames[int(vt)]
@@ -121,6 +122,16 @@ func (st LString) Format(f fmt.State, c rune) {
 	default:
 		defaultFormat(string(st), f, c)
 	}
+}
+
+type LAddress string
+
+func (ad LAddress) String() string   { return string(ad) }
+func (ad LAddress) Type() LValueType { return LTAddress }
+
+// fmt.Formatter interface
+func (ad LAddress) Format(f fmt.State, c rune) {
+	defaultFormat(string(ad), f, c)
 }
 
 func (nm LNumber) String() string   { return string(nm) }

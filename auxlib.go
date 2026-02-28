@@ -64,6 +64,27 @@ func (ls *LState) CheckString(n int) string {
 	return ""
 }
 
+func (ls *LState) CheckAddress(n int) LAddress {
+	v := ls.Get(n)
+	switch lv := v.(type) {
+	case LAddress:
+		addr, err := parseAddressString(string(lv))
+		if err != nil {
+			ls.ArgError(n, err.Error())
+		}
+		return addr
+	case LString:
+		addr, err := parseAddressString(string(lv))
+		if err != nil {
+			ls.ArgError(n, err.Error())
+		}
+		return addr
+	default:
+		ls.TypeError(n, LTAddress)
+	}
+	return LAddress("")
+}
+
 func (ls *LState) CheckBool(n int) bool {
 	v := ls.Get(n)
 	if lv, ok := v.(LBool); ok {
@@ -188,6 +209,30 @@ func (ls *LState) OptString(n int, d string) string {
 	}
 	ls.TypeError(n, LTString)
 	return ""
+}
+
+func (ls *LState) OptAddress(n int, d LAddress) LAddress {
+	v := ls.Get(n)
+	if v == LNil {
+		return d
+	}
+	switch lv := v.(type) {
+	case LAddress:
+		addr, err := parseAddressString(string(lv))
+		if err != nil {
+			ls.ArgError(n, err.Error())
+		}
+		return addr
+	case LString:
+		addr, err := parseAddressString(string(lv))
+		if err != nil {
+			ls.ArgError(n, err.Error())
+		}
+		return addr
+	default:
+		ls.TypeError(n, LTAddress)
+	}
+	return LAddress("")
 }
 
 func (ls *LState) OptBool(n int, d bool) bool {
